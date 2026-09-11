@@ -8,6 +8,7 @@
 #include "nvm_dynamic_keymap.h"
 #include "nvm_eeprom_eeconfig_internal.h"
 #include "nvm_eeprom_via_internal.h"
+#include "nvm_eeprom_analog_internal.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -106,9 +107,14 @@ STATIC_ASSERT((int64_t)(DYNAMIC_KEYMAP_EEPROM_MAX_ADDR) - (int64_t)(DYNAMIC_KEYM
 #    error Unknown total EEPROM size. Cannot derive maximum for dynamic keymaps.
 #endif
 // Dynamic macros are stored after the keymaps and use what is available
-// up to and including DYNAMIC_KEYMAP_EEPROM_MAX_ADDR.
+// up to and including DYNAMIC_KEYMAP_EEPROM_MAX_ADDR, minus the analog
+// persistence region borrowed off the tail (0 when ANALOG_ENABLE is off).
 #ifndef DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE
-#    define DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE (DYNAMIC_KEYMAP_EEPROM_MAX_ADDR - DYNAMIC_KEYMAP_MACRO_EEPROM_ADDR + 1)
+#    define DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE (DYNAMIC_KEYMAP_EEPROM_MAX_ADDR - DYNAMIC_KEYMAP_MACRO_EEPROM_ADDR + 1 - VIAL_ANALOG_EEPROM_SIZE)
+#endif
+
+#if defined(ANALOG_ENABLE)
+STATIC_ASSERT((int64_t)(DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE) >= 100, "analog 持久化区借出后动态宏区不足 100 字节");
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

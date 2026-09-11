@@ -1,0 +1,382 @@
+# Vial Analog Protocol Extension (磁轴 / 静电容)
+
+> 契约文档：定义固件侧 `vial-qmk-wireless` 与 GUI/Web 侧之间的"模拟行程"通信协议。
+> **行程单位为 0–255，不使用 mm。** 固件实现见 `quantum/vial.c`(协议层) 与
+> `quantum/analog/analog_core.h`(核心层)，命令号枚举见 `quantum/vial.h`。
+
+- **基座**：Vial Raw HID，固定 32 字节包，`msg[0]=0xFE` 前缀，`msg[1]=命令号`。
+- **命令号选址**：基础 Vial 子命令 `0x00`–`0x0D` 已占用且随上游从低位继续增长；
+  本扩展刻意取高位段 `0xF0`–`0xF5`，远离增长区，规避上游未来占用低位的冲突。
+- **设计原则**：轴体无关——Hall(磁轴) 与 EC(静电容) 在后端都由各自的键程模型映射为
+  0–255 行程；上层协议只谈"阈值"，两种轴共用同一套命令。
+
+---
+
+## 1. 概念模型
+
+### 1.1 推模型（push model）——与核心状态机的关系
+
+**固件是按下状态的唯一权威**，上报是被动查询，不是协议驱动状态机：
+
+```
+板级 matrix_scan()                      核心 (quantum/analog)
+  ├─ adc_read()            取原始 ADC
+  ├─ absv = |adc - 2048|   转成差值域        ← 板级决定，核心不碰 ADC
+  ├─ analog_model_sw(ki, absv) → sw 0-255   ← 键程模型(板级选编，全 weak)
+  └─ analog_step_key(ki, sw) ──────────────→ 状态机推进，返回 true = 按下状态翻转
+                                             └─ 板级据此翻 matrix[row] 的位
+```
+
+要点：
+
+- **核心只见 0–255 行程域**，`top_reading`/`bottom_reading` 是键程模型在**原始 ADC 域**的
+  校准锚点，核心只负责存储、持久化与在变更时回调模型（`analog_backend_calibration_changed`）。
+- 行程映射**不是**协议层的线性归一化，而是板级选定的模型（见 §5）。协议只传锚点与阈值。
+- GUI 的 `0xF3` 实时查询与 `0xF1` 配置读写**都不会**改变按下状态。
+
+### 1.2 线格式每键配置 `vial_analog_wire_config_t`（12 字节，0xF1/0xF2 用）
+
+```c
+typedef struct __attribute__((packed)) {
+    uint8_t  actuation_point;   // [0]     触发阈值 0-255（上穿即注册按下）
+    uint8_t  release_point;     // [1]     断开阈值 0-255（下穿即释放，≤触发阈值形成回差）
+    uint8_t  rt_down;           // [2]     RT 触发距离 0-255（0=该方向不跟踪）
+    uint8_t  rt_up;             // [3]     RT 释放距离 0-255（0=该方向不跟踪）
+    uint8_t  flags;             // [4]     见下
+    uint8_t  reserved;          // [5]
+    uint16_t raw_rest;          // [6..7]  锚点：静置原始读数（小端）
+    uint16_t raw_full;          // [8..9]  锚点：触底原始读数（小端）
+    uint16_t reserved2;         // [10..11]
+} vial_analog_wire_config_t;    // 12 字节
+```
+
+`flags` 位定义（对应 `VIAL_ANALOG_FLAG_*`）：
+
+| bit | 名称 | 含义 |
+|-----|------|------|
+| 0 | `RT_ENABLED` | 本键启用 Rapid Trigger（`rt_down`/`rt_up` 只在回差带内生效）|
+| 1 | `ACTUATION_OVERRIDE` | 1 = 本键自定义阈值；**0 = 本键归全局管**（写 0 会让该键回到跟随全局）|
+| 2 | `CONTINUOUS` | 实时上报开关（当前仅持久化并原样回报，尚不参与 `0xF3` 节流）|
+| 3..7 | 预留 | 恒 0 |
+
+> `ACTUATION_OVERRIDE` 与核心内部位**极性相反**：核心用 `ANALOG_FLAG_FOLLOW_GLOBAL`
+> （1=跟随），线上用 `ACTUATION_OVERRIDE`（1=自定义）。翻译在 `quantum/vial.c`。
+
+### 1.3 阈值字段 ↔ 核心字段映射
+
+| 线格式 | 核心 (`analog_key_t` / `analog_global_t`) |
+|--------|------------------------------------------|
+| `actuation_point` | `actuation_threshold` |
+| `release_point` | `release_threshold` |
+| `rt_down` | `actuation_offset` |
+| `rt_up` | `release_offset` |
+| `flags.bit0` | `ANALOG_FLAG_RT_ENABLED`（同义）|
+| `flags.bit1` | 取反后 = `ANALOG_FLAG_FOLLOW_GLOBAL` |
+| `flags.bit2` | `ANALOG_FLAG_CONTINUOUS` |
+| `raw_rest` | `top_reading` |
+| `raw_full` | `bottom_reading` |
+
+### 1.4 状态机（核心逐键运行，`analog_step_key`）
+
+核心维护每键 `pressed` 位与 RT 极值 `extremum`：
+
+**回差带外（先判，优先于 RT）**
+- `sw < release_threshold` → 强制释放
+- `sw > actuation_threshold` → 强制触发
+- 若 `release_threshold > actuation_threshold`，两者交换后使用（容忍 GUI 传反）
+
+**回差带内 `[release, actuation]`**：仅当 `flags.RT_ENABLED` 才继续
+- 已按下：跟踪峰值；自峰值回落 ≥ `rt_up` → 释放，`rt_up==0` 表示该方向不跟踪
+- 未按下：跟踪谷值；自谷值上行 ≥ `rt_down` → 触发，`rt_down==0` 表示该方向不跟踪
+- 翻转时把极值重置为当前 `sw`
+
+> 出厂 `flags = FOLLOW_GLOBAL`（RT 关），即默认纯阈值滞回。
+
+---
+
+## 2. 命令定义（`msg[1]`，`0xFE` 前缀）
+
+所有请求 `msg[0]=0xFE`、`msg[1]=cmd`、`msg[2..]=参数`；响应写回 `msg[0..31]`（同 32 字节包）。
+`VIAL_ANALOG_PROTOCOL_VERSION = 2`。
+
+> 版本史：v1 使用子命令 `0x0E`–`0x13`；v2 迁移到 `0xF0`–`0xF5`（规避上游低位增长区
+> 冲突）并改为推模型。GUI 侧应以 `0xF0` 应答的 `msg[0]` 版本号做兼容判断。
+
+### 0xF0 `vial_analog_get_caps` —— 取能力
+
+- req: `[FE][F0][00]`
+- resp:
+  | 偏移 | 含义 |
+  |------|------|
+  | msg[0] | analog 协议版本 (=2) |
+  | msg[1..2] | 总键数 `num_keys`（小端）|
+  | msg[3] | `axis_type`：1=磁轴(Hall)，2=静电容(EC)。仅供显示 |
+  | msg[4] | `caps_flags`：见下 |
+  | msg[5] | 单包最大读数条数 = 10（`0xF3` 一次返回几个键）|
+  | msg[6] | `config_size` = 12（每键配置字节数，前向兼容用）|
+  | msg[7] | 触底校准模式当前运行态：`1`=开，`0`=关（GUI 重启后据此对上开关）|
+  | msg[8..31] | 0 |
+
+- `caps_flags` 位：bit0 每键触发阈值、bit1 Rapid Trigger、bit2 校准、bit3 实时读数、
+  bit4 每键断开阈值、bit5 `BOTTOM_OUT_CAL`（支持 `0xF4` mode4/5 触底校准开关）
+  → 当前上报 `0x3F`。bit6 `AUTO_CAL` **预留未实现**（未置位，`AUTO_PEAK` mode3 返错）。
+- `axis_type` 由编译期 `ANALOG_PROTOCOL_AXIS_TYPE` 推导（默认磁轴；定义
+  `ANALOG_MODEL_EC` 时为静电容），板级可覆盖。核心层不持轴概念。
+
+### 0xF1 `vial_analog_get_key_config` —— 取单键配置+锚点
+
+- req: `[FE][F1][ki_lo][ki_hi]`（`ki` 小端，0 起；`0xFFFF`=全局默认槽）
+- resp: `msg[0..11]` = 12 字节 `vial_analog_wire_config_t`，其余不变
+- `ki=0xFFFF` 返回 **EEPROM 存储的全局默认配置**，其 `raw_rest`/`raw_full` 回
+  编译期出厂锚点（全局槽不持有锚点）
+- 越界 `ki` → `msg[0]=1`（且不发配置）
+  > 注意：合法响应也以 `msg[0]=actuation_point` 开头，其值可能是 1，故该错误码
+  > **不可靠**。越界请求属于 GUI 侧不应发出的输入，GUI 应自查 `ki < num_keys`。
+
+### 0xF2 `vial_analog_set_key_config` —— 写单键配置
+
+- req: `[FE][F2][ki_lo][ki_hi][12 字节 config...]`
+- resp: `msg[0]=0` 成功 / 非 0 错误码（仅越界 `ki` 报 1）
+- `ki=0xFFFF` → 写**全局默认槽**：写入后由核心**级联刷新所有跟随全局键**的
+  4 项阈值+RT 位，GUI 无需（也不应）逐键补写
+- `flags.ACTUATION_OVERRIDE=0` → 该键**回到跟随全局**：取全局阈值与 RT 位、重新置
+  `FOLLOW_GLOBAL`；**校准锚点不动**（锚点是本键物理量，与阈值无关）
+- `flags.ACTUATION_OVERRIDE=1` → 该键**转为自定义**：写入 4 项阈值并清除 `FOLLOW_GLOBAL`
+- 无论哪条分支，`raw_rest`/`raw_full` 都会按传入值写入锚点（`0xF4` 之外显式写锚点的
+  另一条合法途径；值未变时不会产生 EEPROM 写）
+- 写权限：与 Vial 其它写命令一致，**不要求 unlock**——unlock 只拦"改键位定义/动态配置"。
+  Vial 经 WebHID 直连本机，非远程攻击面。
+
+### 0xF3 `vial_analog_get_key_readings` —— 实时行程批量上报（可视化用）
+
+- req: `[FE][F3][start_lo][start_hi]`
+- resp:
+  - `msg[0]` = 本包条数 `n`（0..10）
+  - `msg[1 + i*3]` = 该键行程 `sw` 0–255
+  - `msg[2 + i*3]` / `msg[3 + i*3]` = 原始读数 `raw` 低/高字节（小端 16 位）
+  - 条目从 `start_ki` 起连续排列
+- 取值来源：`raw` = 板级钩子 `analog_backend_get_raw_adc(ki)`；
+  `sw` = `analog_model_sw(ki, raw)` **即时换算**（非读取状态机内部值，故与触发判定同源）
+- 板级后端不可用（`raw < 0`）该条记 `sw=0, raw=0`
+- `start_ki ≥ num_keys` → `n=0`（GUI 据此结束轮询）
+- GUI 轮询：从 ki=0 起连续请求直到 `n=0`，刷新率由 GUI 控制（建议 60–100Hz 分批）
+- 节能：`flags.CONTINUOUS` 当前**不参与**本命令节流（核心状态机不读它，仅持久化+回报）
+
+### 0xF4 `vial_analog_calibrate` —— 校准采样
+
+- req: `[FE][F4][mode][ki_lo][ki_hi]` ← `mode` 在 `msg[2]`，`ki` 在 `msg[3..4]`
+- `ki=0xFFFF` = 全部键
+- resp: `msg[0]` = 错误码
+
+  | mode | 动作 | 写入字段 |
+  |------|------|----------|
+  | 0 | `SAMPLE_REST` | 以各键当前 `raw` 写 `top_reading`（要求用户松开所有键）|
+  | 1 | `SAMPLE_FULL` | 以各键当前 `raw` 写 `bottom_reading`（要求用户按下到底）|
+  | 2 | `RESET_CAL` | 锚点恢复编译期出厂值 `ANALOG_DEFAULT_TOP/BOTTOM_READING` |
+  | 3 | `AUTO_PEAK` | **未实现**，返回错误码 1（`caps` 不报 `AUTO_CAL` 位）|
+  | 4 | `BOTTOM_OUT_ON` | 开**触底校准模式**（纯运行态，不落盘）：扫描侧抑制全部键输出
+        （等效 `KC_NO`）、状态机不推进，同时把"比当前 `bottom_reading` 更深"的读数
+        喂回 `bottom_reading`（只允许推高）|
+  | 5 | `BOTTOM_OUT_OFF` | 关触底校准模式，恢复正常输出 |
+
+  错误码：`0` 成功；`1` 未知模式或参数越界；`2` 板级后端不可用（全部键 `raw<0`）
+- `mode=0/1` 成功时 `msg[1..2]` = 本次首个成功采样键的 `raw`（小端），便于 GUI 即时显示
+- `mode=2` 恢复的是**出厂锚点**而非 0/255：锚点在原始 ADC 域，写 0 会让键程模型失效
+  直到下次开机重采
+- `mode=4/5` 只看 `mode`、忽略 `ki`；当前状态随 `0xF0` 的 `msg[7]` 回报
+- **触底校准模式语义**：GUI 把"重新校准触底读数"做成开关——开启期间用户逐个把每个键
+  按到底（此时键盘没有任何输出，不会误触），扫描侧持续把各键 `bottom_reading` 顶到最深；
+  关闭即结束。模式**纯运行态**：不进 EEPROM、开机默认关，上一次忘关也不会把键盘留成
+  "砖"。扫描期间 `last_absv` 照常更新，所以 `0xF3` 的行程/读数在模式内仍然有效
+- **校准不变量（锚点安全边界）**：`analog_set_top_reading` / `analog_set_bottom_reading`
+  对入参做 clamp——`top_reading ≤ DEFAULT_TOP - ANALOG_CAL_GUARD`、
+  `bottom_reading ≥ DEFAULT_BOTTOM + ANALOG_CAL_GUARD`（`ANALOG_CAL_GUARD` 默认 8，
+  板级可覆盖），越界值视为噪声回落到边界。典型越界来源是"触底校准时有个别键没按"，
+  那批键读到的是静置值，若收下会把 `bottom` 压到 `top` 附近甚至倒挂，直接造成误触发。
+  出厂默认恰好压在边界上（375/675，未校准时的最宽参考），任何一次真实校准都会把它
+  推进边界以内；`top < bottom` 由两条边界同时成立保证。`persist_load` 也过同一个
+  clamp（旧固件可能写过越界锚点）
+
+### 0xF5 `vial_analog_reset_key` —— 复位键配置
+
+- req: `[FE][F5][ki_lo][ki_hi]`
+- resp: `msg[0]=0` 成功 / `1` 失败（越界）
+- 单键（`ki` 有效）：**回全局并重新跟随**——4 项阈值与 RT 位取全局槽内容、置
+  `FOLLOW_GLOBAL`；**保留本键校准锚点**（`top_reading` 每次开机重采，`bottom_reading`
+  是本键物理量）
+- `ki=0xFFFF`：**出厂重置**——全局槽 + 所有键全部回编译期默认值，**连锚点一起**回
+  `ANALOG_DEFAULT_TOP/BOTTOM_READING`，并**立即落盘**（不等防抖）
+
+---
+
+## 3. EEPROM 持久化布局
+
+区由 `quantum/nvm/eeprom/nvm_eeprom_analog_internal.h` 统一描述，**分配链与寻址共用它**，
+板级 `config.h` 无需参与：
+
+```c
+#define VIAL_ANALOG_EEPROM_SIZE (ANALOG_PERSIST_SIZE)              /* ANALOG_ENABLE 关时为 0 */
+#define VIAL_ANALOG_EEPROM_ADDR (TOTAL_EEPROM_BYTE_COUNT - VIAL_ANALOG_EEPROM_SIZE)
+```
+
+- **缩让动作**在 `nvm_dynamic_keymap.c`：动态宏区尾部让出
+  `VIAL_ANALOG_EEPROM_SIZE` 字节，并静态断言宏区剩余 ≥100 字节。
+  关掉 `ANALOG_ENABLE` 时为 0，EEPROM 布局与原版完全一致。
+- **区首锚在 EEPROM 末尾向前数**，不依赖 VIA/动态键位是否启用。
+
+### 3.1 布局与偶地址约定
+
+| 段 | 字节 | 说明 |
+|----|------|------|
+| 头 | 8 | 见下 |
+| 记录 | 8 × `num_keys` | 每键一条，96 键 = 768 |
+| 全局 | 6 | `analog_global_t`（5 字段 + 1 补齐）|
+| **合计** | **782**（96 键）| |
+
+区首 = `TOTAL - SIZE`，故 **SIZE 为偶 ⇒ 区首为偶 ⇒ 每条 8 字节记录都落在偶地址**。
+这个偶性是靠"三段字节数各自为偶"**天然成立**的，`analog_core.h` §9 用四条静态断言把关
+（头为偶、记录为偶、全局段为偶、总长为偶），**不再用 `(SIZE+1)&~1` 掩码**——掩码只会
+掩盖"尺寸为奇"这个事实，而真正要守的是区首地址为偶。
+
+`analog_global_t` 的第 6 字节 `reserved` 就是为此补齐的（写盘恒 0）。
+
+96 键 / 4096B EEPROM（STM32F072xB）实算：`SIZE=782`，`ADDR=3314`，`3314+782=4096`
+正好贴住末尾。
+
+### 3.2 头部与记录
+
+```c
+typedef struct {          // 8 字节头
+    uint32_t magic;       // 0x474E4156 "VANG"，小端
+    uint8_t  version;     // 1，布局改动须 bump
+    uint8_t  num_keys;    // 单字节（静态断言 num_keys ≤ 255）
+    uint8_t  record_bytes;// 8
+    uint8_t  checksum;    // 数据段(记录+全局，共 774B)逐字节 XOR
+} analog_persist_header_t;
+
+typedef struct {          // 8 字节记录，字段顺序即落盘顺序
+    uint8_t  actuation_threshold;
+    uint8_t  release_threshold;
+    uint8_t  actuation_offset;
+    uint8_t  release_offset;
+    uint16_t bottom_reading;   // 小端
+    uint8_t  flags;
+    uint8_t  reserved;
+} analog_record_t;
+```
+
+- **不持久化**：`top_reading`（每次开机重采）、`extremum`（运行态）。
+- **跟随全局键不冗余存储**：它们的 4 项阈值加载时从全局记录推导；只有全局记录进落盘数据。
+- **作废条件**：magic/version/`num_keys`/`record_bytes` 任一不符，或校验和不过 → 整区作废，
+  开机写回出厂默认（`analog_init` 的 `persist_load()` 失败路径）。
+- **落盘时机**：`analog_task()`（由 `housekeeping_task` 每循环调用）检查脏位图，**防抖
+  500 ms** 后一次性提交脏记录 + 全局 + 重写头校验和。实时校准会在扫描里反复推高
+  `bottom_reading`，逐次写会撑爆 FEE 写日志，故必须攒批。
+  显式用户动作（`0xF5` 出厂重置）走 `persist_flush_all()` 立即落盘。
+
+---
+
+## 4. 固件侧 API（`quantum/analog/analog_core.h`）
+
+```c
+/* 生命周期 */
+void     analog_init(void);                       // 填出厂默认 + 加载 EEPROM(失败则写回)；重算模型派生参数
+void     analog_task(void);                       // 周期落盘入口(脏位 + 防抖)
+
+/* 推模型状态机(板级扫描逐键调用) */
+bool     analog_step_key(uint16_t ki, uint8_t sw); // 返回 true = 按下状态翻转
+bool     analog_get_pressed(uint16_t ki);
+
+/* 校准锚点(会回调模型层重算派生参数) */
+void     analog_set_top_reading(uint16_t ki, uint16_t value);
+void     analog_set_bottom_reading(uint16_t ki, uint16_t value);
+
+/* 配置 */
+void     analog_set_key_config(uint16_t ki, const uint8_t params[4], bool rt_on); // 清 FOLLOW_GLOBAL
+void     analog_set_global(const analog_global_t *g);                            // 级联刷新跟随键
+bool     analog_reset_key(uint16_t ki);            // ki=0xFFFF 出厂重置
+bool     analog_key_is_customized(uint16_t ki);
+void     analog_mark_dirty(uint16_t ki);           // 协议层直接改 flags 后标脏
+
+/* 触底校准模式(运行态，见 0xF4 mode4/5) */
+void     analog_set_bottom_out_mode(bool on);
+bool     analog_get_bottom_out_mode(void);
+void     analog_force_release(uint16_t ki);        // 只清按下位，不通知模型层
+
+/* 单键实时跟踪(核心只留一份 sw，不常驻 sw[96]) */
+void     analog_set_tracked_key(uint16_t ki);
+uint8_t  analog_get_tracked_sw(void);
+int16_t  analog_get_tracked_raw(void);
+
+/* 键程模型层标准钩子(全 weak，板级可强覆盖) */
+uint8_t  analog_model_sw(uint16_t ki, uint16_t absv);
+void     analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom);
+
+/* 板级实现：返回该键最近一次真实 ADC 读数；<0 = 不可用。weak 默认 -1 */
+int16_t  analog_backend_get_raw_adc(uint16_t ki);
+```
+
+实例：`g_analog_key[ANALOG_NUM_KEYS]`、`g_analog_global`、`g_analog_pressed_bits[]`、
+`g_analog_tracked_key`。
+
+### 4.1 键程模型选编
+
+`analog_core.c` 按 `config.h` 的 `#define` 选编，与构建系统无关：
+
+- `#define ANALOG_MODEL_ISF` → 编入 `analog_model_isf.h`（平方反比-快速，磁轴）
+- 不定义 → 仅编入 `analog_model_linear.h`（线性）
+
+两个模型头的钩子**全为 weak**，未被任何模型实现的钩子由 `analog_model_linear.h` 兜底；
+板级 `.c` 也可强符号覆盖单个钩子（ELF 语义）。
+
+---
+
+## 5. 板级接入清单
+
+1. `rules.mk`：`ANALOG_ENABLE = yes`（启用本扩展与核心层）。
+   走 ADC 采样的板子还需 `ANALOG_DRIVER_REQUIRED = yes`——它让 QMK 编入平台
+   ADC 驱动（`adc_read`/`pinToMux`），与 `ANALOG_ENABLE` 是两件事。
+2. `config.h`：按需覆盖 `ANALOG_DEFAULT_*`；选模型（如 `#define ANALOG_MODEL_ISF`）。
+3. 板级 `matrix.c` 扫描里逐键：`adc_read` → `absv` → `analog_model_sw()` →
+   `analog_step_key()` → 据返回值翻矩阵位；实时校准调 `analog_set_top/bottom_reading()`。
+4. 实现 `analog_backend_get_raw_adc()`（供 `0xF3` 显示原始值）。
+5. 若用 `0xF4` mode4/5 触底校准开关：扫描里在 `analog_get_bottom_out_mode()` 为真时
+   跳过 `analog_step_key()`，改为清矩阵位 + `analog_force_release(ki)`，并用
+   `analog_set_bottom_reading()` 只推高本键 `bottom_reading`（详见参考实现）。
+
+参考实现：`keyboards/bvbhu/tl96mgf072/tl96mgf072_matrix.c`。
+> `0xF0`–`0xF5` 全部命令都在 `quantum/vial.c` 的 `#ifdef ANALOG_ENABLE` 段内，
+> 未启用 analog 的板子不会编入这些代码。
+
+---
+
+## 6. 无线兼容（BHQ）
+
+- 协议包走标准 Vial raw HID。下行：BHQ 空口数据经 `wireless.c` 喂入 `raw_hid_receive()`，
+  其中 `via_command_bhq()`（VIA 顶层命令 0xF1/0xF2，USB/OTA 切换）仅在 `raw_hid_receive()`
+  的 switch 之前做一次 early-return 拦截，与本扩展的 Vial 子命令（`msg[0]=0xFE` 命名空间）
+  正交；上行：`raw_hid_send()` 已经 `bluetooth_send_raw_hid()` → `bhq_send_hid_raw()`
+  自动路由到空口。本扩展命令**无需额外改动**即可经蓝牙透传。
+- 带宽：`0xF3` 每包 10 键，96 键需 10 包/帧；60Hz 刷新下约 600 包/s，BT 下需实测。
+
+---
+
+## 7. 与 v1（拉模型）的差异
+
+v1 的以下设计已**移除**，GUI 按 v1 实现的代码需重写：
+
+| v1 | v2（现状）|
+|----|-----------|
+| 固件按 `analog_backend_read_raw()` 归一化并持有 `sw[96]` | 板级逐键推入 `analog_step_key()`，核心只留被跟踪键一份 `sw` |
+| `analog_get_travel()` / `analog_get_raw()` 按 `uint8_t ki` 查询 | `analog_backend_get_raw_adc(uint16_t ki)` + `analog_model_sw()` |
+| `analog_load_config()` / `analog_store_config()` / `analog_calibrate()` | `analog_set_key_config()` / `analog_set_global()` / `analog_set_*_reading()` |
+| `ANALOG_AXIS_TYPE_NONE/HALL/EC/MIXED` 枚举 + `ANALOG_AXIS_TYPE_DEFAULT` | 无轴类型枚举；`axis_type` 由模型宏推导，仅供显示 |
+| 每键 12 字节 + 12 字节全局槽，偏移手写在 `ANALOG_EEPROM_BASE` | 每键 8 字节记录 + 6 字节全局，区址由 EEPROM 分配链自动推导 |
+| `raw_rest=0` / `raw_full=255` 归一化恒等映射 | 锚点是原始 ADC 域物理量（磁轴参考值 375/675）|
+| `0xF4` 四种 mode 全实现 | `AUTO_PEAK`(mode 3) 未实现，返回错误码 1；新增 `BOTTOM_OUT_ON/OFF`(mode 4/5)
+  触底校准开关（纯运行态）+ 锚点 clamp 不变量 |
+
+已移除的旧符号：`analog_backend_read_raw`、`analog_get_travel`、`analog_get_raw`、
+`analog_load_config`、`analog_store_config`、`analog_calibrate`、`analog_get_num_keys`、
+`analog_get_axis_type`、`sw_scaled`、`get/set_noise_floor`、`get/set_bottom_reading`
+（这些是旧板级/核心名，现由 §1.3 映射与 §4 API 取代）。

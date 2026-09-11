@@ -24,6 +24,10 @@
 
 #include "vial_ensure_keycode.h"
 
+#ifdef ANALOG_ENABLE
+#    include "analog/analog_core.h"
+#endif
+
 #define VIAL_UNLOCK_COUNTER_MAX 50
 
 #ifdef VIAL_INSECURE
@@ -82,6 +86,143 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
         return 0;
     return in;
 }
+
+#ifdef ANALOG_ENABLE
+/* ==== Vial Analog 协议扩展(0xF0-0xF5)：线格式翻译层 ====
+ * 命令语义见 docs/vial-analog-protocol.md(v2)。行程 0-255，轴体无关。
+ * 线上 12 字节 config ↔ 推模型核心(analog_core.h) 的字段映射：
+ *   actuation_point/release_point -> actuation/release_threshold(行程域阈值)
+ *   rt_down/rt_up                 -> actuation/release_offset(RT 触发/释放距离)
+ *   flags bit0 RT_ENABLED         -> ANALOG_FLAG_RT_ENABLED(同义)
+ *   flags bit1 ACTUATION_OVERRIDE -> !FOLLOW_GLOBAL(线上 1=已自定义，与核心位相反)
+ *   flags bit2 CONTINUOUS         -> ANALOG_FLAG_CONTINUOUS(随 flags 落盘)
+ *   raw_rest/raw_full             -> top/bottom_reading(原始 ADC 域锚点)
+ * ki=0xFFFF 是全局默认槽：只有 5 项阈值+RT 有意义，锚点/CONTINUOUS 对全局无意义；
+ * 写全局经 analog_set_global 级联刷新所有跟随键，GUI 无需(也不应)逐键补写。 */
+
+#define VIAL_ANALOG_PROTOCOL_VERSION 2
+
+/* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，板级可覆盖 */
+#ifndef ANALOG_PROTOCOL_AXIS_TYPE
+#    if defined(ANALOG_MODEL_EC)
+#        define ANALOG_PROTOCOL_AXIS_TYPE 2 /* 静电容 */
+#    else
+#        define ANALOG_PROTOCOL_AXIS_TYPE 1 /* 磁轴(Hall) */
+#    endif
+#endif
+
+enum {
+    VIAL_ANALOG_CAP_PER_KEY_ACTUATION = (1 << 0),
+    VIAL_ANALOG_CAP_RAPID_TRIGGER     = (1 << 1),
+    VIAL_ANALOG_CAP_CALIBRATION       = (1 << 2),
+    VIAL_ANALOG_CAP_LIVE_READINGS     = (1 << 3),
+    VIAL_ANALOG_CAP_PER_KEY_RELEASE   = (1 << 4),
+    /* 触底校准开关(0xF4 mode 4/5)：开启时全部键等效 KC_NO，逐个按满即采集触底锚点 */
+    VIAL_ANALOG_CAP_BOTTOM_OUT_CAL    = (1 << 5),
+    /* bit6 预留(AUTO_CAL：AUTO_PEAK 未实现，0xF4 mode3 返回错误码) */
+    VIAL_ANALOG_CAPS_FLAGS = (VIAL_ANALOG_CAP_PER_KEY_ACTUATION | VIAL_ANALOG_CAP_RAPID_TRIGGER | VIAL_ANALOG_CAP_CALIBRATION | VIAL_ANALOG_CAP_LIVE_READINGS | VIAL_ANALOG_CAP_PER_KEY_RELEASE | VIAL_ANALOG_CAP_BOTTOM_OUT_CAL),
+};
+
+enum {
+    VIAL_ANALOG_FLAG_RT_ENABLED         = (1 << 0),
+    VIAL_ANALOG_FLAG_ACTUATION_OVERRIDE = (1 << 1),
+    VIAL_ANALOG_FLAG_CONTINUOUS         = (1 << 2),
+};
+
+enum {
+    VIAL_ANALOG_CAL_SAMPLE_REST    = 0,
+    VIAL_ANALOG_CAL_SAMPLE_FULL    = 1,
+    VIAL_ANALOG_CAL_RESET          = 2,
+    VIAL_ANALOG_CAL_AUTO_PEAK      = 3, /* 未实现 */
+    VIAL_ANALOG_CAL_BOTTOM_OUT_ON  = 4, /* 触底校准模式开：全部键等效 KC_NO */
+    VIAL_ANALOG_CAL_BOTTOM_OUT_OFF = 5, /* 触底校准模式关 */
+};
+
+#define VIAL_ANALOG_MAX_READINGS 10 /* 0xF3 单包上限：floor((32-1)/3) */
+
+typedef struct __attribute__((packed)) {
+    uint8_t  actuation_point;
+    uint8_t  release_point;
+    uint8_t  rt_down;
+    uint8_t  rt_up;
+    uint8_t  flags;
+    uint8_t  reserved;
+    uint16_t raw_rest;
+    uint16_t raw_full;
+    uint16_t reserved2;
+} vial_analog_wire_config_t;
+
+_Static_assert(sizeof(vial_analog_wire_config_t) == 12, "vial analog wire config must be 12 bytes");
+
+static uint8_t vial_analog_wire_flags(const analog_key_t *k) {
+    uint8_t f = 0;
+    if (k->flags & ANALOG_FLAG_RT_ENABLED) f |= VIAL_ANALOG_FLAG_RT_ENABLED;
+    if (!(k->flags & ANALOG_FLAG_FOLLOW_GLOBAL)) f |= VIAL_ANALOG_FLAG_ACTUATION_OVERRIDE;
+    if (k->flags & ANALOG_FLAG_CONTINUOUS) f |= VIAL_ANALOG_FLAG_CONTINUOUS;
+    return f;
+}
+
+/* 核心 -> 线格式(0xF1)。ki 无效由调用方先行拦截。 */
+static void vial_analog_get_wire_config(uint16_t ki, vial_analog_wire_config_t *c) {
+    memset(c, 0, sizeof(*c));
+    if (ki == 0xFFFF) {
+        c->actuation_point = g_analog_global.actuation_threshold;
+        c->release_point   = g_analog_global.release_threshold;
+        c->rt_down         = g_analog_global.actuation_offset;
+        c->rt_up           = g_analog_global.release_offset;
+        if (g_analog_global.rt_enabled) c->flags = VIAL_ANALOG_FLAG_RT_ENABLED;
+        c->raw_rest = ANALOG_DEFAULT_TOP_READING;    /* 全局槽不持锚点：回出厂参考值 */
+        c->raw_full = ANALOG_DEFAULT_BOTTOM_READING;
+        return;
+    }
+    const analog_key_t *k = &g_analog_key[ki];
+    c->actuation_point = k->actuation_threshold;
+    c->release_point   = k->release_threshold;
+    c->rt_down         = k->actuation_offset;
+    c->rt_up           = k->release_offset;
+    c->flags           = vial_analog_wire_flags(k);
+    c->raw_rest        = k->top_reading;
+    c->raw_full        = k->bottom_reading;
+}
+
+/* 线格式 -> 核心(0xF2)。返回错误码(0=成功)。 */
+static uint8_t vial_analog_set_wire_config(uint16_t ki, const vial_analog_wire_config_t *c) {
+    if (ki == 0xFFFF) {
+        analog_global_t g;
+        g.actuation_threshold = c->actuation_point;
+        g.release_threshold   = c->release_point;
+        g.actuation_offset    = c->rt_down;
+        g.release_offset      = c->rt_up;
+        g.rt_enabled          = (c->flags & VIAL_ANALOG_FLAG_RT_ENABLED) ? 1 : 0;
+        analog_set_global(&g);
+        return 0;
+    }
+    if (ki >= ANALOG_NUM_KEYS) return 1;
+
+    /* ACTUATION_OVERRIDE=0 表示"该键归全局管"：先按 0xF5 单键复位的语义回到跟随态
+     * (取全局阈值+RT 位、置 FOLLOW_GLOBAL)，校准锚点不动——锚点是本键物理量。
+     * 否则走自定义路径：set_key_config 无条件清 FOLLOW_GLOBAL 即是"转自定义"。 */
+    if (!(c->flags & VIAL_ANALOG_FLAG_ACTUATION_OVERRIDE)) {
+        analog_reset_key(ki);
+    } else {
+        const uint8_t params[4] = { c->actuation_point, c->release_point, c->rt_down, c->rt_up };
+        analog_set_key_config(ki, params, (c->flags & VIAL_ANALOG_FLAG_RT_ENABLED) != 0);
+    }
+
+    /* CONTINUOUS 位写进核心 flags(bit2)，随持久化记录一起落盘、0xF1 原样回报。
+     * 必须在上面两条分支之后写：它们都会整体改写 flags 而覆盖本位。
+     * 另注意仅在位值真变化时标脏，避免 GUI 轮询式重写刷爆 FEE 写日志。 */
+    uint8_t want = (c->flags & VIAL_ANALOG_FLAG_CONTINUOUS) ? (uint8_t)ANALOG_FLAG_CONTINUOUS : (uint8_t)0;
+    if ((g_analog_key[ki].flags & ANALOG_FLAG_CONTINUOUS) != want) {
+        g_analog_key[ki].flags = (uint8_t)((g_analog_key[ki].flags & (uint8_t)~ANALOG_FLAG_CONTINUOUS) | want);
+        analog_mark_dirty(ki);
+    }
+    /* 锚点随配置一起传：0xF4 之外显式写锚点的合法途径(值未变时 update-block 不磨损) */
+    analog_set_top_reading(ki, c->raw_rest);
+    analog_set_bottom_reading(ki, c->raw_full);
+    return 0;
+}
+#endif /* ANALOG_ENABLE */
 
 void vial_handle_cmd(uint8_t *msg, uint8_t length) {
     /* All packets must be fixed 32 bytes */
@@ -327,6 +468,112 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
 
             break;
         }
+#ifdef ANALOG_ENABLE
+        /* ---- Vial Analog 协议扩展(0xF0-0xF5)，翻译层见文件头部说明 ---- */
+        case vial_analog_get_caps: {
+            memset(msg, 0, length);
+            msg[0] = VIAL_ANALOG_PROTOCOL_VERSION;
+            msg[1] = ANALOG_NUM_KEYS & 0xFF;
+            msg[2] = 0; /* ANALOG_NUM_KEYS <= 255(analog_core.c 静态断言) */
+            msg[3] = ANALOG_PROTOCOL_AXIS_TYPE;
+            msg[4] = VIAL_ANALOG_CAPS_FLAGS;
+            msg[5] = VIAL_ANALOG_MAX_READINGS;
+            msg[6] = sizeof(vial_analog_wire_config_t);
+            msg[7] = analog_get_bottom_out_mode() ? 1 : 0; /* 触底校准开关状态：GUI 重启后能对上(旧固件恒 0) */
+            break;
+        }
+        case vial_analog_get_key_config: {
+            uint16_t ki = msg[2] | ((uint16_t)msg[3] << 8);
+            if (ki != 0xFFFF && ki >= ANALOG_NUM_KEYS) {
+                msg[0] = 1;
+                break;
+            }
+            vial_analog_wire_config_t c;
+            vial_analog_get_wire_config(ki, &c);
+            memcpy(msg, &c, sizeof(c));
+            break;
+        }
+        case vial_analog_set_key_config: {
+            uint16_t ki = msg[2] | ((uint16_t)msg[3] << 8);
+            vial_analog_wire_config_t c;
+            memcpy(&c, &msg[4], sizeof(c));
+            msg[0] = vial_analog_set_wire_config(ki, &c);
+            break;
+        }
+        case vial_analog_get_key_readings: {
+            uint16_t start = msg[2] | ((uint16_t)msg[3] << 8);
+            uint8_t  n     = 0;
+            if (start < ANALOG_NUM_KEYS) {
+                n = (uint8_t)(ANALOG_NUM_KEYS - start);
+                if (n > VIAL_ANALOG_MAX_READINGS) n = VIAL_ANALOG_MAX_READINGS;
+                for (uint8_t i = 0; i < n; i++) {
+                    uint16_t k    = start + i;
+                    int16_t  raw  = analog_backend_get_raw_adc(k);
+                    uint16_t rawu = (raw < 0) ? 0 : (uint16_t)raw;
+                    msg[1 + i * 3] = (raw < 0) ? 0 : analog_model_sw(k, rawu);
+                    msg[2 + i * 3] = (uint8_t)(rawu & 0xFF);
+                    msg[3 + i * 3] = (uint8_t)(rawu >> 8);
+                }
+            }
+            msg[0] = n;
+            break;
+        }
+        case vial_analog_calibrate: {
+            uint8_t  mode = msg[2];
+            uint16_t ki   = msg[3] | ((uint16_t)msg[4] << 8);
+            uint16_t lo   = (ki == 0xFFFF) ? 0 : ki;
+            uint16_t hi   = (ki == 0xFFFF) ? (ANALOG_NUM_KEYS - 1) : ki;
+            msg[0] = 1; /* 未知模式/参数越界默认报错 */
+            if (lo >= ANALOG_NUM_KEYS || lo > hi) break;
+            switch (mode) {
+                case VIAL_ANALOG_CAL_SAMPLE_REST:
+                case VIAL_ANALOG_CAL_SAMPLE_FULL: {
+                    int16_t first = -1;
+                    for (uint16_t i = lo; i <= hi; i++) {
+                        int16_t raw = analog_backend_get_raw_adc(i);
+                        if (raw < 0) continue;
+                        if (mode == VIAL_ANALOG_CAL_SAMPLE_REST) {
+                            analog_set_top_reading(i, (uint16_t)raw);
+                        } else {
+                            analog_set_bottom_reading(i, (uint16_t)raw);
+                        }
+                        if (first < 0) first = raw;
+                    }
+                    if (first >= 0) {
+                        msg[0] = 0;
+                        msg[1] = (uint8_t)(first & 0xFF);
+                        msg[2] = (uint8_t)((uint16_t)first >> 8);
+                    } else {
+                        msg[0] = 2; /* 板级后端不可用 */
+                    }
+                    break;
+                }
+                case VIAL_ANALOG_CAL_BOTTOM_OUT_ON:
+                case VIAL_ANALOG_CAL_BOTTOM_OUT_OFF:
+                    /* 触底校准开关：纯运行态、不落盘(上次没关绝不能带到下次启动变砖)。
+                     * 期间扫描侧抑制输出并只推高各键 bottom_reading，见 tl96mgf072_matrix.c */
+                    analog_set_bottom_out_mode(mode == VIAL_ANALOG_CAL_BOTTOM_OUT_ON);
+                    msg[0] = 0;
+                    break;
+                case VIAL_ANALOG_CAL_RESET:
+                    /* 恢复出厂锚点(非 0/255：锚点是原始 ADC 域物理量，0 会让模型失效到重开机) */
+                    for (uint16_t i = lo; i <= hi; i++) {
+                        analog_set_top_reading(i, ANALOG_DEFAULT_TOP_READING);
+                        analog_set_bottom_reading(i, ANALOG_DEFAULT_BOTTOM_READING);
+                    }
+                    msg[0] = 0;
+                    break;
+                default: /* AUTO_PEAK 未实现：保持错误码 1，caps 不报 AUTO_CAL 位 */
+                    break;
+            }
+            break;
+        }
+        case vial_analog_reset_key: {
+            uint16_t ki = msg[2] | ((uint16_t)msg[3] << 8);
+            msg[0] = analog_reset_key(ki) ? 0 : 1;
+            break;
+        }
+#endif
     }
 }
 

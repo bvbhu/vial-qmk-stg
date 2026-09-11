@@ -23,6 +23,14 @@ ifeq ($(strip $(VIALRGB_ENABLE)), yes)
     OPT_DEFS += -DVIALRGB_ENABLE
 endif
 
+# Analog (静电容/磁轴) — 行程 0-255，协议命令详见 docs/vial-analog-protocol.md
+ANALOG_ENABLE ?= no
+ifeq ($(strip $(ANALOG_ENABLE)), yes)
+    SRC += $(QUANTUM_DIR)/analog/analog_core.c
+    COMMON_VPATH += $(QUANTUM_DIR)/analog
+    OPT_DEFS += -DANALOG_ENABLE
+endif
+
 ifeq ($(strip $(QMK_SETTINGS)), yes)
     AUTO_SHIFT_ENABLE := yes
     SRC += $(QUANTUM_DIR)/qmk_settings.c
