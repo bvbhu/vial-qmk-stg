@@ -241,6 +241,9 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
 #ifdef LAYER_LOCK_ENABLE
                         | (1 << 1)  // Bit 1: Layer Lock.
 #endif
+#ifdef BLUETOOTH_ENABLE
+                        | (1 << 2)  // Bit 2: Wireless (BHQ/BLE).
+#endif
                         );
                 break;
             }

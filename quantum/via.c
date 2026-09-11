@@ -65,6 +65,10 @@
 #include "vialrgb.h"
 #endif
 
+#if defined(BLUETOOTH_BHQ)
+#    include "bhq.h"
+#endif
+
 // Forward declare some helpers.
 #if defined(VIA_QMK_BACKLIGHT_ENABLE)
 void via_qmk_backlight_set_value(uint8_t *data);
@@ -220,6 +224,15 @@ void raw_hid_receive(uint8_t *data, uint8_t length) {
         uint8_t cmd = data[1];
         if (cmd != vial_get_keyboard_id && cmd != vial_get_size && cmd != vial_get_def && cmd != vial_get_unlock_status && cmd != vial_unlock_start && cmd != vial_unlock_poll)
             goto skip;
+    }
+#endif
+
+#if defined(BLUETOOTH_BHQ)
+    /* BHQ 专有命令(0xF1 模块透传/0xF2 强制切USB)优先处理：
+     * 返回 true 时已自行发送响应，early return 跳过末尾 raw_hid_send。
+     * 与 qmk_firmware_wireless fork 的 raw_hid_receive 行为一致。 */
+    if (via_command_bhq(data, length)) {
+        return;
     }
 #endif
 

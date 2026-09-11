@@ -37,6 +37,7 @@ int16_t analogReadPinAdc(pin_t pin, uint8_t adc);
 adc_mux pinToMux(pin_t pin);
 
 int16_t adc_read(adc_mux mux);
+void adc_stop_all(void);
 
 #ifdef __cplusplus
 }

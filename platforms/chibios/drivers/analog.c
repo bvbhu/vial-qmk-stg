@@ -448,3 +448,20 @@ int16_t adc_read(adc_mux mux) {
     return sampleBuffer[ADC_DUMMY_CONVERSIONS_AT_START];
 #endif
 }
+
+/**
+ * @brief 停止所有 ADC 外设并复位初始化标志。
+ *
+ * 供 BHQ 低功耗(STOP 模式)使用：休眠前关闭 ADC 以降低功耗；
+ * 唤醒后 halInit()/adcInit() 已将驱动状态重置为 ADC_STOP，
+ * 此处同步 adcInitialized[]，使后续 adc_read() 能重新调用 adcStart()。
+ */
+void adc_stop_all(void) {
+    for (uint8_t adc = 0; adc < ADC_COUNT; adc++) {
+        ADCDriver* drv = intToADCDriver(adc);
+        if (drv && adcInitialized[adc]) {
+            adcStop(drv);
+        }
+        adcInitialized[adc] = false;
+    }
+}
