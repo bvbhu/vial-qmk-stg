@@ -1,0 +1,87 @@
+{
+    "keyboard_name": "hlpad17",
+    "manufacturer": "keymagichorse",
+    "processor": "AT32F415",
+    "bootloader": "at32-dfu",
+    "usb": {
+        "vid": "0xBB00",
+        "pid": "0xBB00",
+        "device_version": "1.0.0"
+    },
+    "features": {
+        "bootmagic": true,
+        "command": false,
+        "console": false,
+        "extrakey": true,
+        "mousekey": true,
+        "bluetooth": true,
+        "nkro": true,
+        "rgblight": true
+    },
+    "bluetooth":{
+        "driver":"bhq"
+    },
+    "build": {
+        "debounce_type": "sym_defer_pk",
+        "lto": true
+    },
+    "debounce": 10,
+    "matrix_pins": {
+        "cols": ["C13", "C14", "B8", "B3"],
+        "rows": ["B14", "B13", "A13", "A15", "A14"]
+    },
+    "rgblight": {
+        "led_count": 1,
+        "animations": {
+            "breathing": true,
+            "rainbow_mood": true,
+            "rainbow_swirl": true,
+            "snake": true,
+            "knight": true,
+            "christmas": true,
+            "static_gradient": true,
+            "rgb_test": true,
+            "alternating": true,
+            "twinkle": true
+        },
+        "default": {
+            "animation": "rainbow_mood"
+        },
+        "layers": {
+            "enabled": true,
+            "override_rgb": true
+        }
+    },
+    "ws2812": {
+        "pin": "B1"
+        // "driver": "pwm"
+    },
+    "diode_direction": "ROW2COL",
+    "layouts": {
+        "LAYOUT": {
+            "layout": [
+                { "matrix": [0, 0], "x": 0, "y": 0 },
+                { "matrix": [0, 1], "x": 1, "y": 0 },
+                { "matrix": [0, 2], "x": 2, "y": 0 },
+                { "matrix": [0, 3], "x": 3, "y": 0 },
+
+                { "matrix": [1, 0], "x": 0, "y": 1 },
+                { "matrix": [1, 1], "x": 1, "y": 1 },
+                { "matrix": [1, 2], "x": 2, "y": 1 },
+                { "matrix": [1, 3], "x": 3, "y": 1 , "h": 2},
+
+                { "matrix": [2, 0], "x": 0, "y": 2 },
+                { "matrix": [2, 1], "x": 1, "y": 2 },
+                { "matrix": [2, 2], "x": 2, "y": 2 },
+
+                { "matrix": [3, 0], "x": 0, "y": 3 },
+                { "matrix": [3, 1], "x": 1, "y": 3 },
+                { "matrix": [3, 2], "x": 2, "y": 3 },
+
+                { "matrix": [4, 0], "x": 3, "y": 3, "h": 2 },
+                { "matrix": [4, 2], "w": 2, "x": 0, "y": 4 },
+                { "matrix": [4, 3], "x": 2, "y": 4 }
+            ]
+        }
+    }
+}
