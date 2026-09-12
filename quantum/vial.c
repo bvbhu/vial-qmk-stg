@@ -100,7 +100,7 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
  * ki=0xFFFF 是全局默认槽：只有 5 项阈值+RT 有意义，锚点/CONTINUOUS 对全局无意义；
  * 写全局经 analog_set_global 级联刷新所有跟随键，GUI 无需(也不应)逐键补写。 */
 
-#define VIAL_ANALOG_PROTOCOL_VERSION 2
+#define VIAL_ANALOG_PROTOCOL_VERSION 3 /* v3: 0xF2 改为仅改 RAM(suppress 落盘)、新增 0xF6 显式保存 */
 
 /* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，板级可覆盖 */
 #ifndef ANALOG_PROTOCOL_AXIS_TYPE
@@ -185,8 +185,9 @@ static void vial_analog_get_wire_config(uint16_t ki, vial_analog_wire_config_t *
     c->raw_full        = k->bottom_reading;
 }
 
-/* 线格式 -> 核心(0xF2)。返回错误码(0=成功)。 */
-static uint8_t vial_analog_set_wire_config(uint16_t ki, const vial_analog_wire_config_t *c) {
+/* 线格式 -> 核心(0xF2 的实际处理)。返回错误码(0=成功)。
+ * v3 起 0xF2 仅改 RAM 不落盘：由外层 vial_analog_set_wire_config 包 suppress。 */
+static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_wire_config_t *c) {
     if (ki == 0xFFFF) {
         analog_global_t g;
         g.actuation_threshold = c->actuation_point;
@@ -221,6 +222,16 @@ static uint8_t vial_analog_set_wire_config(uint16_t ki, const vial_analog_wire_c
     analog_set_top_reading(ki, c->raw_rest);
     analog_set_bottom_reading(ki, c->raw_full);
     return 0;
+}
+
+/* 0xF2 对外入口：包一层 suppress，使本次 set 全程只改 RAM、不标脏落盘。
+ * 调参(拖滑块)反复发 0xF2 也不会磨损 EEPROM；用户点 GUI "保存"才发 0xF6 落盘。
+ * 校准(0xF4)/复位(0xF5)/板级扫描不经过本层，仍各自即时标脏落盘。 */
+static uint8_t vial_analog_set_wire_config(uint16_t ki, const vial_analog_wire_config_t *c) {
+    analog_set_persist_suppress(true);
+    uint8_t r = vial_analog_set_wire_config_impl(ki, c);
+    analog_set_persist_suppress(false);
+    return r;
 }
 #endif /* ANALOG_ENABLE */
 
@@ -571,6 +582,14 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
         case vial_analog_reset_key: {
             uint16_t ki = msg[2] | ((uint16_t)msg[3] << 8);
             msg[0] = analog_reset_key(ki) ? 0 : 1;
+            break;
+        }
+        case vial_analog_persist_commit: {
+            /* 0xF6：显式保存——把当前 RAM 全量落盘 EEPROM。
+             * v3 起 0xF2 调参只改 RAM(suppress)，用户点 GUI "保存"才经此命令写 EEPROM。
+             * 校准/复位仍各自即时落盘，不经此命令。 */
+            analog_persist_commit();
+            msg[0] = 0;
             break;
         }
 #endif

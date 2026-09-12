@@ -24,12 +24,7 @@
 #include "eeprom.h" /* TOTAL_EEPROM_BYTE_COUNT / eeprom_update_* (§9 持久化) */
 #include "timer.h"  /* timer_read32：落盘防抖计时 */
 
-/* ---- 选择键程映射模型 ----*/
-#ifdef ANALOG_MODEL_ISF
-#    include "analog_model_isf.h"
-#else
-#    include "analog_model_linear.h"
-#endif
+#include "analog_model.h" /* 键程映射模型 */
 
 /* =========================================================================
  *  持久化(§9)：区址由 QMK 的 EEPROM 分配链决定，板级 config.h 不参与
@@ -86,11 +81,18 @@ static uint8_t  g_persist_dirty[ANALOG_NUM_KEYS / 8 + 1];
 static bool     g_persist_dirty_global = false;
 static uint32_t g_persist_last_flush   = 0;
 
+/* 0xF2 调参期间设 true：persist_mark_* 变 no-op，故 0xF2 只改 RAM、不落盘 EEPROM。
+ * 由 vial_analog_set_wire_config 在处理 0xF2 命令时 set→处理→reset(同步无重入)，
+ * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描不经过该层，标脏照常。 */
+static bool g_persist_suppress = false;
+
 static void persist_mark_key(uint16_t ki) {
+    if (g_persist_suppress) return; /* 0xF2 调参：仅改 RAM，暂不标脏 */
     if (ki < ANALOG_NUM_KEYS) g_persist_dirty[ki >> 3] |= (uint8_t)(1u << (ki & 7));
 }
 
 static void persist_mark_global(void) {
+    if (g_persist_suppress) return; /* 0xF2 调参：仅改 RAM，暂不标脏 */
     g_persist_dirty_global = true;
 }
 
@@ -447,6 +449,21 @@ bool analog_key_is_customized(uint16_t ki) {
 /* 协议层(quantum/vial.c)直接改 flags 后标脏用；核心内部改配置仍走各自的 set_* 路径。 */
 void analog_mark_dirty(uint16_t ki) {
     persist_mark_key(ki);
+}
+
+/* 0xF2 调参期间设 true：persist_mark_* 变 no-op，故 0xF2 只改 RAM、不落盘 EEPROM。
+ * 由 vial_analog_set_wire_config 在处理 0xF2 命令时 set→处理→reset(同步、无重入)，
+ * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描的标脏不受影响。 */
+void analog_set_persist_suppress(bool suppress) {
+    g_persist_suppress = suppress;
+}
+
+/* 0xF6 显式保存：全量落盘当前 RAM 状态(全局+全部记录+头校验和)。
+ * 与 analog_task 的脏标记防抖增量提交不同：本函数一次性写全部记录，供 GUI "保存"
+ * 按钮把 0xF2 调参期间只改了 RAM(未标脏)的阈值真正写入 EEPROM。eeprom_update_block
+ * 的读-比-写使值未变的记录不产生实际擦写，故全量提交不额外磨损 EEPROM。 */
+void analog_persist_commit(void) {
+    persist_flush_all();
 }
 
 /* ---- 触底校准模式(§5.5，运行态) ---- */

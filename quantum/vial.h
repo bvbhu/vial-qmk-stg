@@ -60,6 +60,9 @@ enum {
     vial_analog_get_key_readings= 0xF3,
     vial_analog_calibrate       = 0xF4,
     vial_analog_reset_key       = 0xF5,
+    /* v3：显式保存——把当前 RAM 全量落盘 EEPROM(供 GUI "保存"按钮调用)。
+     * v3 起 0xF2 调参只改 RAM 不落盘，须经此命令才写 EEPROM。 */
+    vial_analog_persist_commit  = 0xF6,
 };
 
 enum {

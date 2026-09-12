@@ -175,13 +175,19 @@ bool analog_key_is_customized(uint16_t ki); /* <=> FOLLOW_GLOBAL 未置位，无
  * 只改运行态(如 extremum)或改锚点请走 analog_set_*_reading，不要用本函数。 */
 void analog_mark_dirty(uint16_t ki);
 
+/* 暂缓落盘开关：true 时 persist_mark_* 变 no-op。
+ * v3 起 0xF2(调参)仅改 RAM 不落盘——vial_analog_set_wire_config 在处理 0xF2 时
+ * set→处理→reset(同步无重入)，故只作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 /
+ * 板级扫描的标脏不受影响。用户点 GUI "保存"才发 0xF6 落盘。 */
+void analog_set_persist_suppress(bool suppress);
+
 /* 强制释放：只清按下位、不通知模型层、不返回翻转标志。触底校准模式抑制输出用：
  * 模式开启时按住着的键要立即变无效，退出后也不残留"幽灵按下"。 */
 void analog_force_release(uint16_t ki);
 
 /* ---- 8. 键程映射模型层标准钩子 ----
  * 实现在 analog_model_*.h(全 weak)，由 analog_core.c 按 config.h 的 #define 选编，
- * 与构建系统无关；未被任何模型实现的钩子走默认线性，规则见 analog_model_linear.h。 */
+ * 与构建系统无关；未被任何模型实现的钩子走默认线性，规则见 analog_model.h。 */
 uint8_t analog_model_sw(uint16_t ki, uint16_t absv); /* absv: ADC 差值(Hall 0..2047 / EC 0..1023) -> sw 0-255 */
 void analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom); /* 核心改锚点后回调，重算模型派生参数 */
 
@@ -244,3 +250,8 @@ _Static_assert((ANALOG_PERSIST_SIZE % 2) == 0, "ANALOG_PERSIST_SIZE 必须为偶
 /* 周期落盘入口：housekeeping_task 每循环调用，脏标记 + 防抖后一次性提交。
  * 扫描中的实时校准会反复推高 bottom_reading，逐次写会撑爆 FEE 写日志。 */
 void analog_task(void);
+
+/* 显式保存(0xF6)：全量落盘当前 RAM 状态(配置+锚点+全局+头校验和)。
+ * 与 analog_task 的脏标记防抖增量提交不同：本函数一次性写全部记录，
+ * 供 GUI "保存"按钮把 0xF2 调参期间只改了 RAM 的阈值真正写入 EEPROM。 */
+void analog_persist_commit(void);

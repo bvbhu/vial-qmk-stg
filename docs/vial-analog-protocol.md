@@ -97,10 +97,12 @@ typedef struct __attribute__((packed)) {
 ## 2. 命令定义（`msg[1]`，`0xFE` 前缀）
 
 所有请求 `msg[0]=0xFE`、`msg[1]=cmd`、`msg[2..]=参数`；响应写回 `msg[0..31]`（同 32 字节包）。
-`VIAL_ANALOG_PROTOCOL_VERSION = 2`。
+`VIAL_ANALOG_PROTOCOL_VERSION = 3`。
 
 > 版本史：v1 使用子命令 `0x0E`–`0x13`；v2 迁移到 `0xF0`–`0xF5`（规避上游低位增长区
-> 冲突）并改为推模型。GUI 侧应以 `0xF0` 应答的 `msg[0]` 版本号做兼容判断。
+> 冲突）并改为推模型；v3 把 `0xF2` 调参改为**仅改 RAM 不落盘**，新增 `0xF6` 显式保存
+> （GUI"保存到 EEPROM"按钮），把整轮调节压成一次 flash 提交。
+> GUI 侧应以 `0xF0` 应答的 `msg[0]` 版本号做兼容判断（v2 固件仍为每次 0xF2 自动落盘）。
 
 ### 0xF0 `vial_analog_get_caps` —— 取能力
 
@@ -108,7 +110,7 @@ typedef struct __attribute__((packed)) {
 - resp:
   | 偏移 | 含义 |
   |------|------|
-  | msg[0] | analog 协议版本 (=2) |
+  | msg[0] | analog 协议版本 (=3) |
   | msg[1..2] | 总键数 `num_keys`（小端）|
   | msg[3] | `axis_type`：1=磁轴(Hall)，2=静电容(EC)。仅供显示 |
   | msg[4] | `caps_flags`：见下 |
@@ -137,13 +139,17 @@ typedef struct __attribute__((packed)) {
 
 - req: `[FE][F2][ki_lo][ki_hi][12 字节 config...]`
 - resp: `msg[0]=0` 成功 / 非 0 错误码（仅越界 `ki` 报 1）
+- **v3 语义：只改 RAM，不产生任何 EEPROM 写入**——命令处理全程处于落盘抑制态
+  （`analog_set_persist_suppress(true)` 包住整个写入），状态机与级联即时生效，
+  但脏位不置，`analog_task()` 不会因此落盘。落盘由 GUI 点"保存"经 `0xF6` 显式提交。
+  （v2 固件：本命令置脏、防抖 500ms 后自动落盘——无"保存"按钮的旧行为。）
 - `ki=0xFFFF` → 写**全局默认槽**：写入后由核心**级联刷新所有跟随全局键**的
   4 项阈值+RT 位，GUI 无需（也不应）逐键补写
 - `flags.ACTUATION_OVERRIDE=0` → 该键**回到跟随全局**：取全局阈值与 RT 位、重新置
   `FOLLOW_GLOBAL`；**校准锚点不动**（锚点是本键物理量，与阈值无关）
 - `flags.ACTUATION_OVERRIDE=1` → 该键**转为自定义**：写入 4 项阈值并清除 `FOLLOW_GLOBAL`
 - 无论哪条分支，`raw_rest`/`raw_full` 都会按传入值写入锚点（`0xF4` 之外显式写锚点的
-  另一条合法途径；值未变时不会产生 EEPROM 写）
+  另一条合法途径）。注意 v3 下这些锚点写入同样**暂不落盘**，等 `0xF6` 提交
 - 写权限：与 Vial 其它写命令一致，**不要求 unlock**——unlock 只拦"改键位定义/动态配置"。
   Vial 经 WebHID 直连本机，非远程攻击面。
 
@@ -206,6 +212,17 @@ typedef struct __attribute__((packed)) {
   是本键物理量）
 - `ki=0xFFFF`：**出厂重置**——全局槽 + 所有键全部回编译期默认值，**连锚点一起**回
   `ANALOG_DEFAULT_TOP/BOTTOM_READING`，并**立即落盘**（不等防抖）
+
+### 0xF6 `vial_analog_persist_commit` —— 显式保存（v3 新增）
+
+- req: `[FE][F6][00]`（无参数）
+- resp: `msg[0]=0` 成功
+- 动作：`analog_persist_commit()` → 全量提交——写全局段 + **每条**键记录 + 重写头校验和，
+  等价于出厂重置那条"立即落盘"路径。**不做参数差异**：提交的是 RAM 当前态。
+- 磨损：逐条记录经 `eeprom_update_block` 读比对写，内容与 EEPROM 相同则不产生擦写；
+  跟随全局键的记录恒等于全局推导值，重复保存不额外磨损 flash。
+- GUI 语义：仅当 `0xF0` 版本 ≥3 时启用"保存到 EEPROM"按钮；拖动期间 0xF2 零写入，
+  点一次保存=一次提交。校准/出厂重置不依赖本命令（固件侧自带即时落盘）。
 
 ---
 
@@ -272,7 +289,11 @@ typedef struct {          // 8 字节记录，字段顺序即落盘顺序
 - **落盘时机**：`analog_task()`（由 `housekeeping_task` 每循环调用）检查脏位图，**防抖
   500 ms** 后一次性提交脏记录 + 全局 + 重写头校验和。实时校准会在扫描里反复推高
   `bottom_reading`，逐次写会撑爆 FEE 写日志，故必须攒批。
-  显式用户动作（`0xF5` 出厂重置）走 `persist_flush_all()` 立即落盘。
+  显式用户动作（`0xF5` 出厂重置、`0xF6` 保存）走 `persist_flush_all()` 立即落盘。
+- **v3 落盘抑制**：`0xF2` 调参全程包在 `analog_set_persist_suppress(true)` 里，脏位
+  不置 → 拖动期间零 flash 写入，直到 GUI 点"保存"发 `0xF6`。抑制只包住 0xF2 的
+  处理窗口，校准/复位/板级实时校准（推高 `bottom_reading`）照旧即时标脏；若一次
+  校准触发的落盘顺带持久化了此前未保存的阈值改动，属预期内行为（不丢数据、不额外磨损）。
 
 ---
 
@@ -297,6 +318,8 @@ void     analog_set_global(const analog_global_t *g);                           
 bool     analog_reset_key(uint16_t ki);            // ki=0xFFFF 出厂重置
 bool     analog_key_is_customized(uint16_t ki);
 void     analog_mark_dirty(uint16_t ki);           // 协议层直接改 flags 后标脏
+void     analog_set_persist_suppress(bool on);     // v3：on 时 mark_dirty/级联标脏全部吞掉(0xF2 调参用)
+void     analog_persist_commit(void);              // v3：全量立即落盘(0xF6"保存"按钮)
 
 /* 触底校准模式(运行态，见 0xF4 mode4/5) */
 void     analog_set_bottom_out_mode(bool on);
@@ -321,12 +344,16 @@ int16_t  analog_backend_get_raw_adc(uint16_t ki);
 
 ### 4.1 键程模型选编
 
-`analog_core.c` 按 `config.h` 的 `#define` 选编，与构建系统无关：
+`analog_core.c` 只 `#include "analog_model.h"`，由该头按 `config.h` 的 `#define` 选编，与构建系统无关：
 
 - `#define ANALOG_MODEL_ISF` → 编入 `analog_model_isf.h`（平方反比-快速，磁轴）
-- 不定义 → 仅编入 `analog_model_linear.h`（线性）
+- `#define ANALOG_MODEL_LINEAR_FAST` → 编入 `analog_model_linear_fast.h`
+  （线性，与下默认项同曲线；校准时预算 8.8 定点倒数乘子 K[ki]，扫描里用
+  "乘法+移位"替代 32 位除法，Cortex-M0 上省掉一次软除法。精度 ≤1 LSB。）
+- 不定义 → `analog_model.h` 内联线性兜底（纯除法，全 weak）
+- 二者同时定义 → 编译期 `#error`（互斥）
 
-两个模型头的钩子**全为 weak**，未被任何模型实现的钩子由 `analog_model_linear.h` 兜底；
+各分支的钩子**全为 weak**，未被任何模型实现的钩子由 `analog_model.h` 内联线性兜底；
 板级 `.c` 也可强符号覆盖单个钩子（ELF 语义）。
 
 ---
