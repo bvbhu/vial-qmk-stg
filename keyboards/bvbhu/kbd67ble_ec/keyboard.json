@@ -51,7 +51,6 @@
     },
     "ws2812": {
         "pin": "B15"
-        // "driver": "pwm"
     },
     "diode_direction": "COL2ROW",
     "layouts": {

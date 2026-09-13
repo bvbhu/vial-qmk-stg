@@ -50,8 +50,9 @@ enum {
     vial_dynamic_entry_op = 0x0D,  /* operate on tapdance, combos, etc */
 
     /* ---- Vial Analog Protocol Extension (静电容/磁轴) ----
-     * 详见 docs/vial-analog-protocol.md。行程 0-255，轴体无关。
-     * 刻意使用 0xF0-0xF5 高位段而非紧随 0x0D 的 0x0E+：基础 Vial 协议子命令
+     * 详见 docs/vial-analog-protocol.md。行程域 0..ANALOG_MAX_TRAVEL(板级可配，
+     * 经 0xF0 caps 的 msg[8..9] 上报)，轴体无关。
+     * 刻意使用 0xF0-0xF6 高位段而非紧随 0x0D 的 0x0E+：基础 Vial 协议子命令
      * (0x00-0x0D) 从低位向高增长且无扩展命名空间约定，取顶格可规避上游
      * 未来新版本占用 0x0E-0xEF 造成的冲突。 */
     vial_analog_get_caps        = 0xF0,
@@ -60,8 +61,8 @@ enum {
     vial_analog_get_key_readings= 0xF3,
     vial_analog_calibrate       = 0xF4,
     vial_analog_reset_key       = 0xF5,
-    /* v3：显式保存——把当前 RAM 全量落盘 EEPROM(供 GUI "保存"按钮调用)。
-     * v3 起 0xF2 调参只改 RAM 不落盘，须经此命令才写 EEPROM。 */
+    /* 显式保存——把当前 RAM 全量落盘 EEPROM(供 GUI "保存"按钮调用)。
+     * 0xF2 调参只改 RAM 不落盘，须经此命令才写 EEPROM。 */
     vial_analog_persist_commit  = 0xF6,
 };
 

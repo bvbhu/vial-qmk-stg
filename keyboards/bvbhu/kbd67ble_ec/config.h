@@ -74,14 +74,17 @@
 #define DISCHARGE_TIME 1
 
 // *********************************************** Vial analog 出厂默认值 ***********************************************
-// 行程域：sw = (absv - top) * 255 / (bottom - top)，absv 为原始 ADC 读数(0..1023，按下增大)。
-// 核心层会钳位：top ≤ DEFAULT_TOP-8，bottom ≥ DEFAULT_BOTTOM+8。
-// 开机 keyboard_post_init_kb 实测静置读数重写 top；bottom 由触底校准/实时校准推高。
+// 行程域：sw = (absv - top) * M / (bottom - top)，M = ANALOG_MAX_TRAVEL(见下)。absv 为原始 ADC 读数。
+// 核心钳位 top ≤ DEFAULT_TOP-8、bottom ≥ DEFAULT_BOTTOM+8；开机实测静置读数重写 top。
 #define ANALOG_DEFAULT_TOP_READING 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
 #define ANALOG_DEFAULT_BOTTOM_READING 900      /* 触底锚点初值(可被校准推至1023) */
-#define ANALOG_DEFAULT_ACTUATION_THRESHOLD 144  /* 触发行程(0-255) */
-#define ANALOG_DEFAULT_RELEASE_THRESHOLD 122    /* 释放行程(滞回16行程，防抖动连击) */
+#define ANALOG_DEFAULT_ACTUATION_THRESHOLD 3000  /* 触发行程(0..ANALOG_MAX_TRAVEL) */
+#define ANALOG_DEFAULT_RELEASE_THRESHOLD 1000    /* 释放行程(滞回16行程，防抖动连击) */
 #define CALIBRATION_THRESHOLD 32               /* 实时校准：偏离锚点超过该ADC计数才更新 */
+
+// 行程域满量程(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 EC 锚点跨度约 300-400 ADC 计数，保持 255。
+// 加宽到 >255 则行程域升 uint16(配置/记录/读数尺寸随之变)，出厂阈值须同步否则断言报错。
+#define ANALOG_MAX_TRAVEL 4000
 // *********************************************** Vial analog 出厂默认值 ***********************************************
 
 #ifdef BLUETOOTH_BHQ

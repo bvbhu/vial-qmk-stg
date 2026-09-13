@@ -88,9 +88,9 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
 }
 
 #ifdef ANALOG_ENABLE
-/* ==== Vial Analog 协议扩展(0xF0-0xF5)：线格式翻译层 ====
- * 命令语义见 docs/vial-analog-protocol.md(v2)。行程 0-255，轴体无关。
- * 线上 12 字节 config ↔ 推模型核心(analog_core.h) 的字段映射：
+/* ==== Vial Analog 协议扩展(0xF0-0xF6)：线格式翻译层 ====
+ * 命令语义见 docs/vial-analog-protocol.md。行程域 0..ANALOG_MAX_TRAVEL，轴体无关。
+ * 线上 config ↔ 推模型核心(analog_core.h) 的字段映射：
  *   actuation_point/release_point -> actuation/release_threshold(行程域阈值)
  *   rt_down/rt_up                 -> actuation/release_offset(RT 触发/释放距离)
  *   flags bit0 RT_ENABLED         -> ANALOG_FLAG_RT_ENABLED(同义)
@@ -100,7 +100,9 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
  * ki=0xFFFF 是全局默认槽：只有 5 项阈值+RT 有意义，锚点/CONTINUOUS 对全局无意义；
  * 写全局经 analog_set_global 级联刷新所有跟随键，GUI 无需(也不应)逐键补写。 */
 
-#define VIAL_ANALOG_PROTOCOL_VERSION 3 /* v3: 0xF2 改为仅改 RAM(suppress 落盘)、新增 0xF6 显式保存 */
+/* 协议版本基线号；线格式/语义改动须 bump，GUI constants.py 同步。
+ * 版本史已重置，从 1 起算，不留旧版本分支。 */
+#define VIAL_ANALOG_PROTOCOL_VERSION 1
 
 /* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，板级可覆盖 */
 #ifndef ANALOG_PROTOCOL_AXIS_TYPE
@@ -138,13 +140,22 @@ enum {
     VIAL_ANALOG_CAL_BOTTOM_OUT_OFF = 5, /* 触底校准模式关 */
 };
 
-#define VIAL_ANALOG_MAX_READINGS 10 /* 0xF3 单包上限：floor((32-1)/3) */
+/* 0xF3 单包读数上限：每包 32 字节，msg[0] 放条数，余 31 字节装条目。
+ * 条目 = 行程(sizeof(analog_travel_t)) + 原始读数 2 字节，故窄域 3 字节/条、
+ * 宽域 4 字节/条。GUI 直接采用 caps 回报的条数上限，不自行推算。 */
+#define VIAL_ANALOG_READING_ENTRY_BYTES (ANALOG_TRAVEL_WIDE ? 4u : 3u)
+#define VIAL_ANALOG_MAX_READINGS        ((31u) / VIAL_ANALOG_READING_ENTRY_BYTES) /* 10 / 7 */
 
+/* 每键配置线格式。4 项阈值宽度 = analog_travel_t(行程域宽度)，其余定长：
+ *   行程域 uint8  -> 12 字节，raw_rest 在 [6..7]
+ *   行程域 uint16 -> 16 字节，raw_rest 在 [10..11]
+ * 宽度由 0xF0 的 msg[6](= 本结构 sizeof)与 msg[8..9](满量程)共同声明；
+ * GUI 必须先读 caps 再解析，不得写死字段偏移。 */
 typedef struct __attribute__((packed)) {
-    uint8_t  actuation_point;
-    uint8_t  release_point;
-    uint8_t  rt_down;
-    uint8_t  rt_up;
+    analog_travel_t actuation_point;
+    analog_travel_t release_point;
+    analog_travel_t rt_down;
+    analog_travel_t rt_up;
     uint8_t  flags;
     uint8_t  reserved;
     uint16_t raw_rest;
@@ -152,7 +163,7 @@ typedef struct __attribute__((packed)) {
     uint16_t reserved2;
 } vial_analog_wire_config_t;
 
-_Static_assert(sizeof(vial_analog_wire_config_t) == 12, "vial analog wire config must be 12 bytes");
+_Static_assert(sizeof(vial_analog_wire_config_t) == (ANALOG_TRAVEL_WIDE ? 16u : 12u), "wire config 尺寸随行程域宽度变化：uint8 域 12 字节 / uint16 域 16 字节，且必须无填充");
 
 static uint8_t vial_analog_wire_flags(const analog_key_t *k) {
     uint8_t f = 0;
@@ -186,7 +197,7 @@ static void vial_analog_get_wire_config(uint16_t ki, vial_analog_wire_config_t *
 }
 
 /* 线格式 -> 核心(0xF2 的实际处理)。返回错误码(0=成功)。
- * v3 起 0xF2 仅改 RAM 不落盘：由外层 vial_analog_set_wire_config 包 suppress。 */
+ * 0xF2 仅改 RAM 不落盘：由外层 vial_analog_set_wire_config 包 suppress。 */
 static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_wire_config_t *c) {
     if (ki == 0xFFFF) {
         analog_global_t g;
@@ -206,7 +217,7 @@ static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_w
     if (!(c->flags & VIAL_ANALOG_FLAG_ACTUATION_OVERRIDE)) {
         analog_reset_key(ki);
     } else {
-        const uint8_t params[4] = { c->actuation_point, c->release_point, c->rt_down, c->rt_up };
+        const analog_travel_t params[4] = { c->actuation_point, c->release_point, c->rt_down, c->rt_up };
         analog_set_key_config(ki, params, (c->flags & VIAL_ANALOG_FLAG_RT_ENABLED) != 0);
     }
 
@@ -491,6 +502,9 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
             msg[5] = VIAL_ANALOG_MAX_READINGS;
             msg[6] = sizeof(vial_analog_wire_config_t);
             msg[7] = analog_get_bottom_out_mode() ? 1 : 0; /* 触底校准开关状态：GUI 重启后能对上(旧固件恒 0) */
+            /* 行程域满量程(小端)：GUI 据此对齐量程与推导字段宽度。编译期常量，只此分发一次。 */
+            msg[8] = (uint8_t)((uint16_t)ANALOG_MAX_TRAVEL & 0xFF);
+            msg[9] = (uint8_t)((uint16_t)ANALOG_MAX_TRAVEL >> 8);
             break;
         }
         case vial_analog_get_key_config: {
@@ -521,9 +535,18 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
                     uint16_t k    = start + i;
                     int16_t  raw  = analog_backend_get_raw_adc(k);
                     uint16_t rawu = (raw < 0) ? 0 : (uint16_t)raw;
-                    msg[1 + i * 3] = (raw < 0) ? 0 : analog_model_sw(k, rawu);
-                    msg[2 + i * 3] = (uint8_t)(rawu & 0xFF);
-                    msg[3 + i * 3] = (uint8_t)(rawu >> 8);
+                    /* 条目 = 行程(小端, 1/2 字节) + raw(小端 16 位)；窄 3/宽 4 字节 */
+                    uint8_t        *e  = &msg[1 + (uint16_t)i * VIAL_ANALOG_READING_ENTRY_BYTES];
+                    analog_travel_t sw = (raw < 0) ? 0 : analog_model_sw(k, rawu);
+                    e[0] = (uint8_t)(sw & 0xFFu);
+#if ANALOG_TRAVEL_WIDE
+                    e[1] = (uint8_t)(sw >> 8);
+                    e[2] = (uint8_t)(rawu & 0xFFu);
+                    e[3] = (uint8_t)(rawu >> 8);
+#else
+                    e[1] = (uint8_t)(rawu & 0xFFu);
+                    e[2] = (uint8_t)(rawu >> 8);
+#endif
                 }
             }
             msg[0] = n;
@@ -586,7 +609,7 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
         }
         case vial_analog_persist_commit: {
             /* 0xF6：显式保存——把当前 RAM 全量落盘 EEPROM。
-             * v3 起 0xF2 调参只改 RAM(suppress)，用户点 GUI "保存"才经此命令写 EEPROM。
+             * 0xF2 调参只改 RAM(suppress)，用户点 GUI "保存"才经此命令写 EEPROM。
              * 校准/复位仍各自即时落盘，不经此命令。 */
             analog_persist_commit();
             msg[0] = 0;

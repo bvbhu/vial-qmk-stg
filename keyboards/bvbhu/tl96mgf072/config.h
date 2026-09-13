@@ -14,6 +14,10 @@
 #define ANALOG_DEFAULT_TOP_READING         375
 #define ANALOG_DEFAULT_BOTTOM_READING      675
 
+/* 行程域满量程(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 Hall 锚点跨度 ~300 ADC 计数，保持 255。
+ * 加宽到 >255 则行程域升 uint16(配置/记录/读数尺寸随之变)，出厂阈值须同步否则断言报错。 */
+#define ANALOG_MAX_TRAVEL 255
+
 /* 持久化：analog 区直接编入 quantum/nvm/eeprom 的 EEPROM 分配链
  * (nvm_dynamic_keymap.c 把动态宏区尾部让出，大小按 ANALOG_PERSIST_SIZE
  * 自动推导)，板级无需配置。 */

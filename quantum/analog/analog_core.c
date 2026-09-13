@@ -49,22 +49,29 @@ _Static_assert(ANALOG_NUM_KEYS <= 255, "持久化头部 num_keys 是单字节");
 #    define ANALOG_PERSIST_FLUSH_MS 500u
 #endif
 
-/* ---- 校准锚点安全边界(校准不变量) ----
+/* 校准锚点安全边界(校准不变量) ----
  * 出厂锚点是"可信最坏范围"的边界：静置读数只允许比 ANALOG_DEFAULT_TOP_READING
  * 更小(更松弛)，触底读数只允许比 ANALOG_DEFAULT_BOTTOM_READING 更大(更深)，
  * 边界外再留 ANALOG_CAL_GUARD 计数的噪声带。越界值一律视为噪声、回落到边界。
+ * ANALOG_CAL_GUARD 定义在 analog_core.h(模型层要用它推派生参数量级)。
  *
  * 最典型的越界来源是"触底校准时有个别键没按"——那批键读到的是静置值，若收下会把
  * bottom 压到 top 附近甚至倒挂，直接造成误触发。clamp 之后恒有
- *   top_reading  <= DEFAULT_TOP  - GUARD
+ *   ANALOG_CAL_GUARD <= top_reading <= DEFAULT_TOP  - GUARD
  *   bottom_reading >= DEFAULT_BOTTOM + GUARD
  * 出厂默认恰好压在边界上(375/675)：那是未校准时的最宽参考，任何一次真实校准都会
  * 把它推进边界以内；top < bottom 由两条边界同时成立保证。 */
-#ifndef ANALOG_CAL_GUARD
-#    define ANALOG_CAL_GUARD 8u
-#endif
+
+/* 噪声带必须比边界窄：否则 clamp_top_reading 的下界会高于上界，两条边界打架。
+ * 这是 ANALOG_CAL_GUARD 唯一的结构性约束，编译期抓比运行期出怪值好。 */
+_Static_assert((uint32_t)ANALOG_DEFAULT_TOP_READING >= 2u * (uint32_t)ANALOG_CAL_GUARD, "ANALOG_CAL_GUARD 过大：DEFAULT_TOP - GUARD < GUARD，顶部噪声带上下界会倒挂");
 
 static uint16_t clamp_top_reading(uint16_t value) {
+    /* 下界：0 或极小值不是"可信的静置读数"，而是空键/未接轴体。收下会让模型层
+     * 拿到 top=0 —— analog_backend_calibration_changed 会因 top==0 提前返回，
+     * 派生参数 D/K 停在上一次的值，而 mapping 却按新 top 判定，两者失配。
+     * 与上界同理：越界值一律视为噪声、回落到边界。 */
+    if (value < (uint16_t)ANALOG_CAL_GUARD) value = (uint16_t)ANALOG_CAL_GUARD;
     uint16_t limit = (ANALOG_DEFAULT_TOP_READING > (uint16_t)ANALOG_CAL_GUARD)
                          ? (uint16_t)(ANALOG_DEFAULT_TOP_READING - (uint16_t)ANALOG_CAL_GUARD)
                          : 0;
@@ -74,6 +81,14 @@ static uint16_t clamp_top_reading(uint16_t value) {
 static uint16_t clamp_bottom_reading(uint16_t value) {
     uint16_t limit = (uint16_t)((uint32_t)ANALOG_DEFAULT_BOTTOM_READING + (uint32_t)ANALOG_CAL_GUARD);
     return (value >= limit) ? value : limit;
+}
+
+/* 行程域饱和：把任意宽度的入参收进 0..ANALOG_MAX_TRAVEL。
+ * 必须比较 ANALOG_MAX_TRAVEL 而非 analog_travel_t 的最大值——满量程小于类型
+ * 上限时(如满量程 300 而类型是 uint16)，类型本身拦不住越界值，而越界阈值会让
+ * 键永远触发不了(sw > act 恒不成立)。EEPROM 里的旧值、GUI 传来的值都过这里。 */
+static inline analog_travel_t clamp_travel(uint32_t value) {
+    return (value > (uint32_t)ANALOG_MAX_TRAVEL) ? (analog_travel_t)ANALOG_MAX_TRAVEL : (analog_travel_t)value;
 }
 
 /* 脏标记：只重写改过的记录，eeprom_update_block 的"读-比-写"才不会白费 */
@@ -183,6 +198,12 @@ static bool persist_load(void) {
     if (persist_checksum_eeprom() != h.checksum) return false;
 
     eeprom_read_block(&g_analog_global, (const void *)(uintptr_t)ANALOG_PERSIST_GLOBAL_BASE, sizeof(g_analog_global));
+    /* 全局段过 clamp：满量程被调小的板子(如 1023 -> 300)记录尺寸不变，整区不会作废，
+     * 会原样读回"旧满量程下写的"阈值；直接沿用会让跟随全局的键永远触发不了。 */
+    g_analog_global.actuation_threshold = clamp_travel(g_analog_global.actuation_threshold);
+    g_analog_global.release_threshold   = clamp_travel(g_analog_global.release_threshold);
+    g_analog_global.actuation_offset    = clamp_travel(g_analog_global.actuation_offset);
+    g_analog_global.release_offset      = clamp_travel(g_analog_global.release_offset);
 
     for (uint16_t i = 0; i < ANALOG_NUM_KEYS; i++) {
         analog_record_t r;
@@ -195,10 +216,10 @@ static bool persist_load(void) {
             k->actuation_offset    = g_analog_global.actuation_offset;
             k->release_offset      = g_analog_global.release_offset;
         } else {
-            k->actuation_threshold = r.actuation_threshold;
-            k->release_threshold   = r.release_threshold;
-            k->actuation_offset    = r.actuation_offset;
-            k->release_offset      = r.release_offset;
+            k->actuation_threshold = clamp_travel(r.actuation_threshold);
+            k->release_threshold   = clamp_travel(r.release_threshold);
+            k->actuation_offset    = clamp_travel(r.actuation_offset);
+            k->release_offset      = clamp_travel(r.release_offset);
         }
         k->bottom_reading = clamp_bottom_reading(r.bottom_reading); /* 旧固件可能写过越界锚点 */
         k->flags          = r.flags;
@@ -225,7 +246,7 @@ uint8_t         g_analog_pressed_bits[ANALOG_PRESSED_WORDS];
 uint16_t        g_analog_tracked_key = ANALOG_TRACK_NONE;
 
 /* 只为被跟踪键留一份行程；不常驻 sw[96] */
-static uint8_t g_tracked_sw = 0;
+static analog_travel_t g_tracked_sw = 0;
 static bool    g_initialized = false;
 
 /* 板级后端钩子的 weak 默认(模型层钩子在上面的模型头文件里)：
@@ -288,15 +309,16 @@ void analog_init(void) {
 }
 
 /* ---- 触发判断 ---- */
-bool analog_step_key(uint16_t ki, uint8_t sw) {
+bool analog_step_key(uint16_t ki, analog_travel_t sw) {
     if (ki >= ANALOG_NUM_KEYS) return false;
 
     analog_key_t *k = &g_analog_key[ki];
 
     if (ki == g_analog_tracked_key) g_tracked_sw = sw;
 
-    uint8_t act = k->actuation_threshold;
-    uint8_t rel = k->release_threshold;
+    /* 宽域下 uint8_t 会截断 >255 的阈值 */
+    analog_travel_t act = k->actuation_threshold;
+    analog_travel_t rel = k->release_threshold;
     if (rel > act) {
         rel = k->actuation_threshold;
         act = k->release_threshold;
@@ -381,14 +403,14 @@ void analog_set_bottom_reading(uint16_t ki, uint16_t value) {
 /* ---- 配置写入与全局级联 ---- */
 
 /* 单键写入即"自定义"：清 FOLLOW_GLOBAL，从此不受全局改动影响。 */
-void analog_set_key_config(uint16_t ki, const uint8_t params[4], bool rt_on) {
+void analog_set_key_config(uint16_t ki, const analog_travel_t params[4], bool rt_on) {
     if (ki >= ANALOG_NUM_KEYS || params == NULL) return;
 
     analog_key_t *k        = &g_analog_key[ki];
-    k->actuation_threshold = params[0];
-    k->release_threshold   = params[1];
-    k->actuation_offset    = params[2];
-    k->release_offset      = params[3];
+    k->actuation_threshold = clamp_travel(params[0]);
+    k->release_threshold   = clamp_travel(params[1]);
+    k->actuation_offset    = clamp_travel(params[2]);
+    k->release_offset      = clamp_travel(params[3]);
     k->flags               = (uint8_t)((k->flags & ~(uint8_t)(ANALOG_FLAG_RT_ENABLED | ANALOG_FLAG_FOLLOW_GLOBAL)) | (rt_on ? ANALOG_FLAG_RT_ENABLED : 0));
     persist_mark_key(ki);
 }
@@ -399,17 +421,23 @@ void analog_set_global(const analog_global_t *g) {
 
     g_analog_global = *g;
     g_analog_global.reserved = 0; /* 调用方的补齐位可能是栈上未初始化值，落盘前抹平 */
+    /* 4 项阈值过 clamp 后再级联：级联源必须是"已收进行程域"的值，
+     * 否则越界值会被这一处复制到所有跟随全局的键上。 */
+    g_analog_global.actuation_threshold = clamp_travel(g_analog_global.actuation_threshold);
+    g_analog_global.release_threshold   = clamp_travel(g_analog_global.release_threshold);
+    g_analog_global.actuation_offset    = clamp_travel(g_analog_global.actuation_offset);
+    g_analog_global.release_offset      = clamp_travel(g_analog_global.release_offset);
 
-    const uint8_t rt_bit = g->rt_enabled ? (uint8_t)ANALOG_FLAG_RT_ENABLED : (uint8_t)0;
+    const uint8_t rt_bit = g_analog_global.rt_enabled ? (uint8_t)ANALOG_FLAG_RT_ENABLED : (uint8_t)0;
 
     for (uint16_t i = 0; i < ANALOG_NUM_KEYS; i++) {
         analog_key_t *k = &g_analog_key[i];
         if (!(k->flags & ANALOG_FLAG_FOLLOW_GLOBAL)) continue; /* 自定义键不受影响 */
 
-        k->actuation_threshold = g->actuation_threshold;
-        k->release_threshold   = g->release_threshold;
-        k->actuation_offset    = g->actuation_offset;
-        k->release_offset      = g->release_offset;
+        k->actuation_threshold = g_analog_global.actuation_threshold;
+        k->release_threshold   = g_analog_global.release_threshold;
+        k->actuation_offset    = g_analog_global.actuation_offset;
+        k->release_offset      = g_analog_global.release_offset;
         k->flags               = (uint8_t)((k->flags & ~(uint8_t)ANALOG_FLAG_RT_ENABLED) | rt_bit);
         /* 只标全局脏：跟随全局键的配置加载时从全局记录推导，不冗余落盘 */
     }
@@ -496,7 +524,7 @@ void analog_set_tracked_key(uint16_t ki) {
     g_tracked_sw         = 0; /* 换键即作废旧值，避免上键行程污染新键 */
 }
 
-uint8_t analog_get_tracked_sw(void) {
+analog_travel_t analog_get_tracked_sw(void) {
     if (g_analog_tracked_key == ANALOG_TRACK_NONE) return 0;
     return g_tracked_sw;
 }
