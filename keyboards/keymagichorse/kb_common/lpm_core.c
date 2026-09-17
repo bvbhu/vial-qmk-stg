@@ -240,8 +240,9 @@ static bool lpm_sleep_prepare(void) {
     gpio_write_pin_low(BHQ_INT_PIN);
 #endif
 
-    // USB 插入检测
-    gpio_set_pin_input(USB_POWER_SENSE_PIN);
+    // USB 插入检测 (内部下拉: 悬空=未插, 与 bhq_common_init 保持一致;
+    // 上升沿唤醒在"5V 拉高该脚"时触发)
+    gpio_set_pin_input_low(USB_POWER_SENSE_PIN);
     palEnableLineEvent(USB_POWER_SENSE_PIN, PAL_EVENT_MODE_RISING_EDGE);
 
     // 停止 UART
@@ -590,7 +591,20 @@ void lpm_task(void) {
     }
 
     // ---------- 蓝牙状态检测 ----------
+    // 广播/配对中不休眠。
     if (wireless_get() == WT_STATE_ADV_UNPAIRED || wireless_get() == WT_STATE_ADV_PAIRING) {
+        lpm_time_up      = false;
+        lpm_timer_buffer = 0;
+        return;
+    }
+
+    // 桥状态未知(尚未收到任何 0x93 状态帧)时同样不计时。
+    // wt_state 要等桥主动上报才更新, 上电到首帧之间有窗口; 若此时就开始倒计时,
+    // 用户在窗口内发起配对(长按 BT1 开 30s 配对)会赶在状态帧之前把 RUN_MODE_PROCESS_TIME
+    // 耗完 -> 键盘在配对等待中自动休眠(休眠前 sdStop 停串口, 桥侧还在广播但主控已睡),
+    // 表现为"配对等到键盘自己睡着"。状态未知时视为"可能有活动", 复位计时器。
+    wt_state_t wst = wireless_get();
+    if (wst == WT_STATE_INITIALIZED || wst == WT_STATE_RESET) {
         lpm_time_up      = false;
         lpm_timer_buffer = 0;
         return;
