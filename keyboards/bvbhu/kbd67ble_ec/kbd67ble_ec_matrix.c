@@ -200,9 +200,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
                 uint16_t absv = ec_readkey_raw(row, amux, col);
                 uint16_t ki   = ANALOG_KI(row, gcol);
 
-                /* 触底校准模式：全部键等效 KC_NO——状态机不走、输出位清零，读数照常采样；
-                 * 同时把"比当前 bottom 更深"的值喂回 bottom 锚点(核心层 clamp 只允许推高)，
-                 * 用户逐个按满每个键即可完成触底校准，关闭开关即结束。 */
+                /* 触底校准模式：抑制输出 + 只推高 bottom（语义见 analog_core.h §5.5） */
                 if (analog_get_bottom_out_mode()) {
                     if ((int)absv > (int)ANALOG_BOTTOM_READING(row, gcol)) {
                         analog_set_bottom_reading(ki, absv);

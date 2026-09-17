@@ -1,5 +1,3 @@
-MAKEFLAGS += -j10
-
 VPATH += $(TOP_DIR)/keyboards/keymagichorse
 
 # Vial analog（0xF0-0xF5 行程调节）：启用 analog 核心层 + ADC 驱动

@@ -5,28 +5,21 @@
 /* =========================================================================
  *  键程映射：平方反比-快速(Hall 磁轴)。板级 config.h 定义 ANALOG_MODEL_ISF 启用。
  *
- *    模型：absv = k/(d-sw)²  ⇒  sw = D - K*V
- *      D = M*t/(t-1)，t = sqrt(bottom/top)；K = sqrt(top)*D/488；V = 488/sqrt(absv) 查表
- *      M = ANALOG_MAX_TRAVEL。488 只是把 D*sqrt(top/absv) 拆成 K、V 两半的比例尺，与 M 无关。
+ *    absv = k/(d-sw)²  ⇒  sw = D - K*V
+ *    D = M*t/(t-1)，t = sqrt(bottom/top)；K = sqrt(top)*D/488；V = 488/sqrt(absv) 查表
+ *    M = ANALOG_MAX_TRAVEL；488 只是把 D*sqrt(top/absv) 拆成 K、V 两半的比例尺。
  *
- *  求值域：热路径只在 top < absv < bottom 求值，那里 K*V ≲ 1.07*D——乘积被 D
- *  本身界住、不随 absv 变小而发散。故"先早退(top/bottom)、后查表"使安全性从
- *  "旧实现靠检查顺序凑巧兜住"变成"求值域本身保证"（旧实现在 M 变大、乘积溢出
- *  int16 后即不成立）。
- *
- *  D 上界 D_max ≤ M*2B/(B-A)（B/A 为校准 clamp 不变量）由下面的静态断言与标量
- *  上限绑死。窄域 int16、宽域 int32，乘积以 int32 累加，热路径一条 MULS。
+ *  热路径只在 top < absv < bottom 求值(先早退再查表)，那里 K*V ≲ 1.07*D，
+ *  乘积被 D 界住、不随 absv 变小而发散。
  * ========================================================================= */
 #pragma once
 
 #include <math.h>
 #include "analog_core.h"
 
-/* 满量程 = 行程域上限；板级改 ANALOG_MAX_TRAVEL 即改这里。 */
 #define ISF_MAX_TRAVEL ((float)ANALOG_MAX_TRAVEL)
 
-/* 每键派生参数的宽度：行程域 uint8 时 int16(历史布局，热路径无变化)，
- * 升到 uint16 域后 int32(D 会超出 int16)。 */
+/* 派生参数宽度：窄域 int16(历史布局)，宽域 int32(D 会超出 int16)。 */
 #if ANALOG_TRAVEL_WIDE
 typedef int32_t isf_scalar_t;
 #    define ISF_SCALAR_MAX 2147483647ll
@@ -35,15 +28,24 @@ typedef int16_t isf_scalar_t;
 #    define ISF_SCALAR_MAX 32767ll
 #endif
 
-/* 宽度充分性编译期净：D_max ≤ M*2B/(B-A)（B=DEFAULT_BOTTOM+GUARD, A=DEFAULT_TOP-GUARD，
- * 由 t/(t-1) ≤ 2B/(B-A) 放缩）。与标量上限绑死；触发说明满量程相对锚点跨度太贪心，
- * 调小 M 或拉开 DEFAULT_BOTTOM/DEFAULT_TOP。 */
+/* 宽度充分性断言：D_max ≤ M*2B/(B-A)，其中
+ *   B = DEFAULT_BOTTOM + GUARD, A = DEFAULT_TOP - GUARD
+ * 由 t/(t-1) ≤ 2B/(B-A) 放缩而来。
+ *
+ * ⚠️ 分母必须用**出厂锚点跨度** B-A，不能用 clamp 域的 span：
+ * fill_defaults() 是直写出厂锚点、不过 clamp 的，所以上电初值恰好落在
+ * clamp 带**之外**；拿 clamp 域去界它会让断言在"锚点几乎相等"的极端配置下
+ * 误判通过，而实际 D 已溢出 int16 回绕成负数 → 该键永远输出 0(死键)。
+ * 触发说明满量程相对锚点跨度太贪心：调小 M 或拉开 DEFAULT_BOTTOM/DEFAULT_TOP。 */
 #define ISF_D_BOUND_NUM ((uint64_t)ANALOG_MAX_TRAVEL * 2u * (uint64_t)(ANALOG_DEFAULT_BOTTOM_READING + ANALOG_CAL_GUARD))
-#define ISF_D_BOUND_DEN ((uint64_t)(ANALOG_DEFAULT_BOTTOM_READING - ANALOG_DEFAULT_TOP_READING + 2 * ANALOG_CAL_GUARD))
+#define ISF_D_BOUND_DEN ((uint64_t)(ANALOG_DEFAULT_BOTTOM_READING - ANALOG_DEFAULT_TOP_READING))
+_Static_assert((ANALOG_DEFAULT_BOTTOM_READING - ANALOG_DEFAULT_TOP_READING) > 0,
+               "ISF 需要出厂默认 bottom > top，否则分母为 0");
 _Static_assert(ISF_D_BOUND_NUM * 8ll <= ISF_D_BOUND_DEN * ISF_SCALAR_MAX,
                "ANALOG_MAX_TRAVEL 相对校准锚点跨度过大：ISF 派生参数 D 会超出 isf_scalar_t，请调小满量程或拉开 DEFAULT_BOTTOM/DEFAULT_TOP");
 
-/* 开机默认 D/K：从出厂校准锚点推导(对应参考实现的 INIT_D/INIT_K)。 */
+/* 开机默认 D/K(对应参考实现的 INIT_D/INIT_K)。
+ * sqrtf() 在 ISO C 里非常量表达式，靠 GCC 编译期折叠；换非 GCC 工具链需改为运行时初始化。 */
 #define ISF_INIT_T (sqrtf((float)ANALOG_DEFAULT_BOTTOM_READING / (float)ANALOG_DEFAULT_TOP_READING))
 #define ISF_INIT_D (ISF_MAX_TRAVEL * ISF_INIT_T / (ISF_INIT_T - 1.0f))
 static const isf_scalar_t ISF_DEFAULT_D = (isf_scalar_t)(ISF_INIT_D + 0.5f);
@@ -53,7 +55,9 @@ static const isf_scalar_t ISF_DEFAULT_K = (isf_scalar_t)(sqrtf((float)ANALOG_DEF
 static isf_scalar_t D[ANALOG_NUM_KEYS] = { [0 ... (ANALOG_NUM_KEYS - 1)] = ISF_DEFAULT_D };
 static isf_scalar_t K[ANALOG_NUM_KEYS] = { [0 ... (ANALOG_NUM_KEYS - 1)] = ISF_DEFAULT_K };
 
-/* V[i] = (488/sqrt(4i) + 488/sqrt(4i+1) + 488/sqrt(4i+2) + 488/sqrt(4i+3)) / 4 */
+/* V[i] = (488/sqrt(4i) + 488/sqrt(4i+1) + 488/sqrt(4i+2) + 488/sqrt(4i+3)) / 4
+ * i=0 那格含 488/sqrt(0)，此处的 372 是让 absv→0 时 V 有界的凑值；
+ * 且热路径只在 top < absv < bottom 求值(top ≥ GUARD = 8)，故下标 0..1 实际不可达。 */
 static const int16_t V[512] = {
     372, 211, 159, 133, 117, 105, 97, 90, 84, 80, 76, 72, 69, 67, 64, 62,
     60, 59, 57, 55, 54, 53, 52, 50, 49, 48, 48, 47, 46, 45, 44, 44, 43,
@@ -102,7 +106,8 @@ __attribute__((weak)) analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv
 
     int32_t r = (int32_t)D[ki] - (int32_t)K[ki] * (int32_t)V[absv >> 2];
 
-    if (r <= 0) return 0; /* 乘积被 D 界住，理论上此处只在舍入时触及 */
+    /* 量化台阶 = K，r 可以是 0（整级量化正好跨过 D）也可以为负，不只是舍入。 */
+    if (r <= 0) return 0;
     if (r >= (int32_t)ANALOG_MAX_TRAVEL) return ANALOG_MAX_TRAVEL;
     return (analog_travel_t)r;
 }

@@ -59,8 +59,15 @@ _Static_assert(ANALOG_NUM_KEYS <= 255, "持久化头部 num_keys 是单字节");
  * bottom 压到 top 附近甚至倒挂，直接造成误触发。clamp 之后恒有
  *   ANALOG_CAL_GUARD <= top_reading <= DEFAULT_TOP  - GUARD
  *   bottom_reading >= DEFAULT_BOTTOM + GUARD
- * 出厂默认恰好压在边界上(375/675)：那是未校准时的最宽参考，任何一次真实校准都会
- * 把它推进边界以内；top < bottom 由两条边界同时成立保证。 */
+ *
+ * 注意**出厂默认锚点(375/675)不在 clamp 域内**：域是 [GUARD, DEFAULT_TOP-GUARD] 与
+ * [DEFAULT_BOTTOM+GUARD, ∞)，默认值由 fill_defaults() 直写、不经 clamp。所以
+ * "top < bottom" 由 DEFAULT_BOTTOM > DEFAULT_TOP 保证，而不是由 clamp 保证；
+ * 用 clamp 的界去推导依赖锚点跨度的量(如 ISF 的 D)时必须改用 DEFAULT_* 原始值。
+ *
+ * 另一处易混：**ANALOG_PERSIST_VERSION(本文件 §9，EEPROM 布局版本) 与
+ * VIAL_ANALOG_PROTOCOL_VERSION(quantum/vial.c，线路协议版本) 语义无关、取值不同**，
+ * 改动其一不必动另一个。 */
 
 /* 噪声带必须比边界窄：否则 clamp_top_reading 的下界会高于上界，两条边界打架。
  * 这是 ANALOG_CAL_GUARD 唯一的结构性约束，编译期抓比运行期出怪值好。 */
@@ -91,23 +98,40 @@ static inline analog_travel_t clamp_travel(uint32_t value) {
     return (value > (uint32_t)ANALOG_MAX_TRAVEL) ? (analog_travel_t)ANALOG_MAX_TRAVEL : (analog_travel_t)value;
 }
 
-/* 脏标记：只重写改过的记录，eeprom_update_block 的"读-比-写"才不会白费 */
-static uint8_t  g_persist_dirty[ANALOG_NUM_KEYS / 8 + 1];
+/* 脏标记：只重写改过的记录，eeprom_update_block 的"读-比-写"才不会白费。
+ * 尺寸与按下位图(analog_core.h 的 ANALOG_PRESSED_WORDS)同口径，两处都按 (N+7)/8 取。 */
+static uint8_t  g_persist_dirty[(ANALOG_NUM_KEYS + 7) / 8];
 static bool     g_persist_dirty_global = false;
 static uint32_t g_persist_last_flush   = 0;
 
 /* 0xF2 调参期间设 true：persist_mark_* 变 no-op，故 0xF2 只改 RAM、不落盘 EEPROM。
  * 由 vial_analog_set_wire_config 在处理 0xF2 命令时 set→处理→reset(同步无重入)，
- * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描不经过该层，标脏照常。 */
+ * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描不经过该层，标脏照常。
+ *
+ * ⚠️ 抑制期被吞掉的标脏记在 g_persist_shadow 里，解除抑制时一次性补标。
+ * 这不是优化而是**正确性要求**：头校验和 persist_checksum_ram() 是按 RAM 全量算的，
+ * 而 persist_flush_dirty() 只写脏项。若某键 RAM 已变却不标脏，则任何**其它**脏项触发的
+ * 增量落盘都会写出一份"校验和按新 RAM、数据段却还是旧值"的区 —— 下次开机校验必然失败，
+ * 整区被出厂默认覆盖。抑制期改的值必须最终进脏位图，才能维持
+ * "非脏键：EEPROM == RAM" 这个不变量。 */
 static bool g_persist_suppress = false;
+static uint8_t g_persist_shadow[(ANALOG_NUM_KEYS + 7) / 8];
+static bool    g_persist_shadow_global = false;
 
 static void persist_mark_key(uint16_t ki) {
-    if (g_persist_suppress) return; /* 0xF2 调参：仅改 RAM，暂不标脏 */
-    if (ki < ANALOG_NUM_KEYS) g_persist_dirty[ki >> 3] |= (uint8_t)(1u << (ki & 7));
+    if (ki >= ANALOG_NUM_KEYS) return;
+    if (g_persist_suppress) {
+        g_persist_shadow[ki >> 3] |= (uint8_t)(1u << (ki & 7)); /* 记影子，解除抑制时补标 */
+        return;
+    }
+    g_persist_dirty[ki >> 3] |= (uint8_t)(1u << (ki & 7));
 }
 
 static void persist_mark_global(void) {
-    if (g_persist_suppress) return; /* 0xF2 调参：仅改 RAM，暂不标脏 */
+    if (g_persist_suppress) {
+        g_persist_shadow_global = true;
+        return;
+    }
     g_persist_dirty_global = true;
 }
 
@@ -133,10 +157,10 @@ static uint8_t persist_checksum_ram(void) {
         analog_record_t r;
         record_of(i, &r);
         const uint8_t *p = (const uint8_t *)&r;
-        for (uint8_t j = 0; j < sizeof(r); j++) x ^= p[j];
+        for (uint16_t j = 0; j < sizeof(r); j++) x ^= p[j];
     }
     const uint8_t *gp = (const uint8_t *)&g_analog_global;
-    for (uint8_t j = 0; j < sizeof(g_analog_global); j++) x ^= gp[j];
+    for (uint16_t j = 0; j < sizeof(g_analog_global); j++) x ^= gp[j];
     return x;
 }
 
@@ -168,7 +192,9 @@ static void persist_flush_all(void) {
         eeprom_update_block(&r, (void *)(uintptr_t)ANALOG_PERSIST_REC_BASE(i), sizeof(r));
     }
     memset(g_persist_dirty, 0, sizeof(g_persist_dirty));
-    g_persist_dirty_global = false;
+    memset(g_persist_shadow, 0, sizeof(g_persist_shadow)); /* 全区已落盘，影子位一并作废 */
+    g_persist_dirty_global  = false;
+    g_persist_shadow_global = false;
     persist_write_header(); /* 校验和盖在数据段上，必须最后写 */
     g_persist_last_flush    = timer_read32();
 }
@@ -222,7 +248,9 @@ static bool persist_load(void) {
             k->release_offset      = clamp_travel(r.release_offset);
         }
         k->bottom_reading = clamp_bottom_reading(r.bottom_reading); /* 旧固件可能写过越界锚点 */
-        k->flags          = r.flags;
+        /* 只收本版本认识的位：EEPROM 里的 bit3..7 按约定恒 0，万一被外部工具写脏
+         * 也绝不带进 RAM——否则下次落盘会把脏位原样写回，永久留在区里。 */
+        k->flags          = r.flags & (ANALOG_FLAG_RT_ENABLED | ANALOG_FLAG_FOLLOW_GLOBAL | ANALOG_FLAG_CONTINUOUS);
         k->extremum       = k->actuation_threshold;
     }
     return true;
@@ -333,7 +361,9 @@ bool analog_step_key(uint16_t ki, analog_travel_t sw) {
             pressed_set(ki, false);
             return true;
         }
-        return false; /* 已在释放态：跳过 RT */
+        /* 已在释放态：继续跟踪谷值，理由同下死区 */
+        if (sw < k->extremum) k->extremum = sw;
+        return false;
     }
 
     /* --- 2) 下死区：强制触发 --- */
@@ -343,7 +373,11 @@ bool analog_step_key(uint16_t ki, analog_travel_t sw) {
             pressed_set(ki, true);
             return true;
         }
-        return false; /* 已在按下态：跳过 RT */
+        /* 已在按下态：仍要继续跟踪峰值。若此处不更新 extremum，峰值会冻结在刚越过
+         * act 的一刻，RT 释放判据退化成"自 act 附近回落"而非"自真实峰值回落"
+         * (act=200/峰值=255/off=20 时应 235 释放，实际要退到 ~180)，手感变钝。 */
+        if (sw > k->extremum) k->extremum = sw;
+        return false;
     }
 
     /* --- 3) [rel, act] 带内：RT 极值跟踪 --- */
@@ -439,7 +473,11 @@ void analog_set_global(const analog_global_t *g) {
         k->actuation_offset    = g_analog_global.actuation_offset;
         k->release_offset      = g_analog_global.release_offset;
         k->flags               = (uint8_t)((k->flags & ~(uint8_t)ANALOG_FLAG_RT_ENABLED) | rt_bit);
-        /* 只标全局脏：跟随全局键的配置加载时从全局记录推导，不冗余落盘 */
+        /* 跟随键的 RAM 被这里改过，必须逐个标脏。不能只标全局：头校验和是按 RAM 全量
+         * 计算的，而 persist_flush_dirty() 只写脏项 —— 漏标会让数据段与校验和失配，
+         * 下次开机整区作废。（曾误以为"加载时按全局推导"可以省掉这些记录，但那只
+         * 影响读取路径，救不了校验和。） */
+        persist_mark_key(i);
     }
     persist_mark_global();
 }
@@ -479,10 +517,23 @@ void analog_mark_dirty(uint16_t ki) {
     persist_mark_key(ki);
 }
 
-/* 0xF2 调参期间设 true：persist_mark_* 变 no-op，故 0xF2 只改 RAM、不落盘 EEPROM。
- * 由 vial_analog_set_wire_config 在处理 0xF2 命令时 set→处理→reset(同步、无重入)，
- * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描的标脏不受影响。 */
+/* 语义见 g_persist_suppress 定义处的注释（0xF2 调参期间设 true 使标脏变 no-op）。
+ *
+ * 解除抑制(false)时把抑制期攒下的影子脏位并回真脏位图：这些键的 RAM 已被改过，
+ * 必须让它们参与后续落盘，否则头校验和(按 RAM 算)会与数据段(只写脏项)失配，
+ * 导致下次开机整区作废。并回不会立刻写 flash —— 仍由 analog_task 的 500ms 防抖
+ * 或用户显式 0xF6 决定落盘时机，故 0xF2 拖动期间依然是零写入。 */
 void analog_set_persist_suppress(bool suppress) {
+    if (g_persist_suppress && !suppress) {
+        for (uint16_t i = 0; i < sizeof(g_persist_shadow); i++) {
+            g_persist_dirty[i] |= g_persist_shadow[i];
+            g_persist_shadow[i] = 0;
+        }
+        if (g_persist_shadow_global) {
+            g_persist_dirty_global   = true;
+            g_persist_shadow_global  = false;
+        }
+    }
     g_persist_suppress = suppress;
 }
 

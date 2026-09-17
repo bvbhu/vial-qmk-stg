@@ -44,14 +44,14 @@ __attribute__((weak)) analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv
     if (ki >= ANALOG_NUM_KEYS) return 0;
 
     const analog_key_t *k = &g_analog_key[ki];
-    uint32_t            floor  = k->top_reading;
+    uint32_t            top    = k->top_reading;
     uint32_t            bottom = k->bottom_reading;
-    if (bottom <= floor) return 0; /* 未校准 / 非法锚点。 */
+    if (bottom <= top) return 0; /* 未校准 / 非法锚点。 */
 
-    if ((uint32_t)absv <= floor) return 0;                 /* 顶部(含)以下：行程 0。 */
+    if ((uint32_t)absv <= top) return 0;                 /* 顶部(含)以下：行程 0。 */
     if ((uint32_t)absv >= bottom) return ANALOG_MAX_TRAVEL; /* 触底(含)以上：满量程。 */
 
-    uint32_t r = (uint32_t)(absv - (uint16_t)floor) * ANALOG_MAX_TRAVEL / (bottom - floor);
+    uint32_t r = ((uint32_t)absv - top) * ANALOG_MAX_TRAVEL / (bottom - top);
     return (r > (uint32_t)ANALOG_MAX_TRAVEL) ? ANALOG_MAX_TRAVEL : (analog_travel_t)r;
 }
 #endif

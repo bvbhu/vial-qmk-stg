@@ -189,7 +189,7 @@ _Static_assert(ANALOG_DEFAULT_RELEASE_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT �
 _Static_assert(ANALOG_DEFAULT_BOTTOM_READING > ANALOG_DEFAULT_TOP_READING, "出厂锚点必须 bottom > top，否则未校准态就倒挂");
 
 /* ---- 7. 行为 API ---- */
-void analog_init(void); /* 填出厂默认值；(暂缓)加载 EEPROM */
+void analog_init(void); /* 填出厂默认值 + 加载 EEPROM(失败则整区写成合法出厂区) */
 
 /* 推模型状态机：板级扫描逐键调用；返回 true = 按下状态翻转，调用方据此翻矩阵位。 */
 bool analog_step_key(uint16_t ki, analog_travel_t sw);

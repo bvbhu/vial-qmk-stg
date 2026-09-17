@@ -29,6 +29,7 @@ int16_t analog_backend_get_raw_adc(uint16_t ki)
 void calibrate_matrix(void)
 {
     uint16_t noise_floor_accum[MATRIX_ROWS][MATRIX_COLS] = { 0 };
+    int16_t  noise_floor_valid[MATRIX_ROWS][MATRIX_COLS] = { 0 }; // 异常样本以负数计数
     for (uint8_t i = 0; i < 20; i++)
     {
         for (uint8_t col = 0; col < MATRIX_COLS; col++)
@@ -39,7 +40,9 @@ void calibrate_matrix(void)
             {
                 uint16_t adc_value_fornoise = adc_read(adcMux[row]);
                 uint16_t absv = adc_value_fornoise <= 2047 ? 2047 - adc_value_fornoise : adc_value_fornoise - 2048;
-                if (absv > ANALOG_DEFAULT_BOTTOM_READING) absv = ANALOG_DEFAULT_TOP_READING; // 异常值
+                // 异常样本(采样期间该键被按下)直接丢弃，不计入均值：旧写法把它替换成
+                // 一个无关常量再照常累加，等于人为拉高该键的噪声基底。
+                if (absv > ANALOG_DEFAULT_BOTTOM_READING) { noise_floor_valid[row][col]--; continue; }
                 noise_floor_accum[row][col] += absv;
             }
             gpio_write_pin_low(col_pins[col]); // 关闭当前列
@@ -48,7 +51,12 @@ void calibrate_matrix(void)
     }
     for (uint8_t row = 0; row < MATRIX_ROWS; row++)
         for (uint8_t col = 0; col < MATRIX_COLS; col++)
-            analog_set_top_reading(row * MATRIX_COLS + col, (uint16_t)(noise_floor_accum[row][col] / 20));
+        {
+            uint16_t n = 20 + noise_floor_valid[row][col];
+            // 全部样本都异常(该键整轮被按住)：保留出厂锚点，别写 0
+            if (n == 0) continue;
+            analog_set_top_reading(row * MATRIX_COLS + col, (uint16_t)(noise_floor_accum[row][col] / n));
+        }
 }
 
 // 标准矩阵函数实现
@@ -57,7 +65,7 @@ void matrix_init(void) // 初始化矩阵
     // 初始化ADC
     for (int idx = 0; idx < MATRIX_ROWS; idx++)
     {
-        setPinInputHigh(row_pins[idx]);                                    // 设置列引脚为输入模式
+        setPinInputHigh(row_pins[idx]);                                    // 设置行引脚为输入模式(每行一路 ADC)
         palSetPadMode(GPIOA, row_pins[idx] & 0x0F, PAL_MODE_INPUT_ANALOG); // 确保GPIO配置为模拟模式
         adcMux[idx] = pinToMux(row_pins[idx]);                             // 将行引脚映射到ADC多路复用器
         adc_read(adcMux[idx]);                                             // 初始读取(稳定ADC)
@@ -87,9 +95,7 @@ uint8_t matrix_scan(void) // 矩阵扫描
             uint16_t absv = adc_value_current <= 2047 ? 2047 - adc_value_current : adc_value_current - 2048;
             uint16_t ki   = row * MATRIX_COLS + col;
 
-            /* 触底校准模式：全部键等效 KC_NO——状态机不走、输出位清零，读数照常采样；
-             * 同时把"比当前 bottom 更深"的值喂回 bottom 锚点(核心层 clamp 只允许推高)，
-             * 用户逐个按满每个键即可完成触底校准，关闭开关即结束。 */
+            /* 触底校准模式：抑制输出 + 只推高 bottom（语义见 analog_core.h §5.5） */
             if (analog_get_bottom_out_mode())
             {
                 if ((int)absv > (int)ANALOG_BOTTOM_READING(row, col))
@@ -109,6 +115,10 @@ uint8_t matrix_scan(void) // 矩阵扫描
                 analog_set_top_reading(ki, absv);
             else if (absv > (int)ANALOG_BOTTOM_READING(row, col) + CALIBRATION_THRESHOLD)
                 analog_set_bottom_reading(ki, absv);
+            // 静置基点回升：只降不升会让长期(温度)漂移单向累积，所有键的行程被
+            // 系统性抬高。读数明显高于当前 top 时按 1 LSB 缓慢跟上去。
+            else if (absv > (int)ANALOG_TOP_READING(row, col) + CALIBRATION_THRESHOLD)
+                analog_set_top_reading(ki, (uint16_t)(ANALOG_TOP_READING(row, col) + 1));
 
             last_absv[row][col] = absv;
 

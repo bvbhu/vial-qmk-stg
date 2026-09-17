@@ -53,9 +53,9 @@ __attribute__((weak)) void analog_backend_calibration_changed(uint16_t ki, uint1
     }
 
     uint32_t span = (uint32_t)bottom - (uint32_t)top;
-    /* K = round((M<<8) / span) = ((M<<8) + span/2) / span。
-     * span>=1 => K <= M<<8(满量程域内)；热路径乘积 (absv-top)*K < span*K
-     * ≈ M<<8 + span/2，对最大 span(2047)与最大 M(65535)约 1.7e7，uint32 接得住。 */
+    /* K 公式见文件头。溢出论证：span>=1 => K <= M<<8(满量程域内)；
+     * 热路径乘积 (absv-top)*K < span*K ≈ M<<8 + span/2，对最大 span(2047)
+     * 与最大 M(65535)约 1.7e7，uint32 接得住。 */
     K[ki] = (linfast_k_t)((((uint32_t)ANALOG_MAX_TRAVEL << LINFAST_FRAC_BITS) + (span / 2u)) / span);
 }
 
@@ -63,15 +63,16 @@ __attribute__((weak)) analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv
     if (ki >= ANALOG_NUM_KEYS) return 0;
 
     const analog_key_t *k = &g_analog_key[ki];
-    uint16_t floor  = k->top_reading;
+    uint16_t top    = k->top_reading;
     uint16_t bottom = k->bottom_reading;
-    if (bottom <= floor) return 0; /* 未校准 / 非法锚点(K[ki] 亦为 0)。 */
+    if (bottom <= top) return 0; /* 未校准 / 非法锚点(K[ki] 亦为 0)。 */
 
-    if ((uint16_t)absv <= floor) return 0;          /* 顶部(含)以下：行程 0。 */
-    if ((uint16_t)absv >= bottom) return ANALOG_MAX_TRAVEL; /* 触底(含)以上：满量程。 */
+    if (absv <= top) return 0;          /* 顶部(含)以下：行程 0。 */
+    if (absv >= bottom) return ANALOG_MAX_TRAVEL; /* 触底(含)以上：满量程。 */
 
-    /* 一次 16x16->32 乘法 + 一次 >>8，替代原 32 位除法。 */
-    uint16_t d = (uint16_t)((uint16_t)absv - floor); /* floor < absv < bottom 已由 clamp 保证 */
+    /* 一次乘法 + 一次 >>8，替代原 32 位除法。
+     * 窄域是 16x16->32；宽域 K 为 uint32，实为 32x32，uint32 中间量仍接得住。 */
+    uint16_t d = (uint16_t)(absv - top); /* top < absv < bottom 已由上面两条早退保证 */
     uint32_t r = ((uint32_t)d * (uint32_t)K[ki]) >> LINFAST_FRAC_BITS;
     /* 大 span 时定点上取整可能多 1 LSB，封顶到满量程(不是 255)。 */
     return (r > (uint32_t)ANALOG_MAX_TRAVEL) ? ANALOG_MAX_TRAVEL : (analog_travel_t)r;
