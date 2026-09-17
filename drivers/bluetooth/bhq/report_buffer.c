@@ -130,21 +130,22 @@ void report_buffer_task(void) {
     if ((!report_buffer_is_empty() || retry) && report_buffer_next_inverval()) 
     {
         bool pending_data = false;
-        if (!retry) {
+        /* 队列优先: 只要有新报文就立即发送, 不再对旧报文做长时间重发,
+         * 否则松开键的报告会被压在 retry 重发之后, 表现为"按下有反应、
+         * 松开无反应"或整串输入丢失。 */
+        if (!report_buffer_is_empty()) {
             if (report_buffer_dequeue(&kb_rpt) && kb_rpt.type != REPORT_TYPE_NONE) {
                 if (timer_read32() > 2) {
                     pending_data      = true;
-                    retry             = RETPORT_RETRY_COUNT;
+                    retry             = 0;
                     retry_time_buffer = timer_read32();
-                    bhq_printf("1 retry:%d\n",retry);
                 }
             }
-        } else {
-            if (timer_elapsed32(retry_time_buffer) > 15) {  // retry interval
+        } else if (retry) {
+            if (timer_elapsed32(retry_time_buffer) > DEFAULT_REPORT_INVERVAL_MS) {  // retry interval
                 pending_data = true;
                 --retry;
                 retry_time_buffer = timer_read32();
-                bhq_printf("2 retry:%d\n",retry);
             }
         }
        if (pending_data) {
