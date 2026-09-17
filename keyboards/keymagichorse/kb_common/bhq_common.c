@@ -55,7 +55,12 @@ void bhq_common_init(void)
     bhq_bat_low_sta = 0;
 #endif
 
-    gpio_set_pin_input(USB_POWER_SENSE_PIN);
+    /* USB 检测脚: 用**内部下拉**而不是浮空输入。
+     * 浮空(原 gpio_set_pin_input)在没接分压/没插 USB 时读数随机, 会让
+     * usb_power_connected() 忽真忽假 —— 连带影响电量读数、休眠判定和
+     * "USB 模式下要不要给桥发 CLOSE"。内部下拉把悬空态钉在 0(未插),
+     * 插上 USB 时外部 5V(经串阻)把它拉高即可判到 1。 */
+    gpio_set_pin_input_low(USB_POWER_SENSE_PIN);
 }
 // --------------------  都是用于处理按键触发的变量 --------------------
 uint16_t this_down_wireless_keycode = 0;
@@ -129,6 +134,10 @@ bool process_record_bhq(uint16_t keycode, keyrecord_t *record) {
                     case RF_TOG:
                         key_ble_host_index = 0;
                         key_ble_host_index = 0;
+                        /* 离开蓝牙通道: 先明确关闭 BLE 广播, 再切 2.4G。
+                         * 桥侧对 RF_EASY 子命令也会停广播(双保险), 但显式 CLOSE
+                         * 语义更清楚, 且兼容不做该兜底的旧桥固件。 */
+                        bhq_CloseBleAdvertising();
                         bhq_switch_rf_easy_kb(key_ble_host_index, 30);
                         transport_set(KB_TRANSPORT_RF);  
                         break;  

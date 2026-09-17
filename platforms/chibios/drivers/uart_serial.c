@@ -105,7 +105,10 @@ static SerialConfig serialConfig = {
 void uart_init(uint32_t baud) {
     static bool is_initialised = false;
 
-    if (is_initialised) {
+    /* 低功耗唤醒后 lpm_wake_restore() 会重新调用本函数, 但 sdStop() 在休眠前
+     * 已把驱动停掉、TX/RX 引脚改成模拟输入。若此处直接 return, 串口就再也起
+     * 不来 → 蓝牙能连上但按键上报发不出去。故驱动处于停止态时必须重启。 */
+    if (is_initialised && (UART_DRIVER.state == SD_READY)) {
         return;
     }
     is_initialised = true;
