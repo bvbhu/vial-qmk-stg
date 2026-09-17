@@ -76,6 +76,9 @@ typedef struct __attribute__((packed)) {
 > 采用哪种宽度由固件编译期决定，并在 `0xF0` 的 `msg[6]`（= `sizeof`）与 `msg[8..9]`
 > （= 满量程）里声明。**GUI 必须先读 caps 再解析，不得写死字段偏移或包长**：
 > 同一串字节在两种宽度下的字段位置完全不同。
+> 两条声明必须自洽：`msg[6]` 只能是 `msg[8..9]` 推导出的那一个宽度对应的字节数
+> （`M <= 255` → 12，否则 16），固件侧由 `vial.c` 的静态断言绑死，GUI 侧在
+> `analog_get_caps()` 里回验 `config_bytes_ok`，不一致一律拒绝接管该标签页。
 
 `flags` 位定义（对应 `VIAL_ANALOG_FLAG_*`）：
 
@@ -83,7 +86,7 @@ typedef struct __attribute__((packed)) {
 |-----|------|------|
 | 0 | `RT_ENABLED` | 本键启用 Rapid Trigger（`rt_down`/`rt_up` 只在回差带内生效）|
 | 1 | `ACTUATION_OVERRIDE` | 1 = 本键自定义阈值；**0 = 本键归全局管**（写 0 会让该键回到跟随全局）|
-| 2 | `CONTINUOUS` | 实时上报开关（当前仅持久化并原样回报，尚不参与 `0xF3` 节流）|
+| 2 | `CONTINUOUS` | **预留**：当前仅被持久化并原样回报，不参与 `0xF3` 节流（见 §0xF3）。GUI 无任何入口设置它，写方应保持 0；在节流语义落地前，读方不得依赖它 |
 | 3..7 | 预留 | 恒 0 |
 
 > `ACTUATION_OVERRIDE` 与核心内部位**极性相反**：核心用 `ANALOG_FLAG_FOLLOW_GLOBAL`
@@ -161,9 +164,9 @@ typedef struct __attribute__((packed)) {
 | ISF 派生标量 | `int16_t` | `int32_t` | `isf_scalar_t` |
 | `LINEAR_FAST` 的 `K` | `uint16_t` | `uint32_t` | `linfast_k_t` |
 
-> 参考板 `keyboards/bvbhu/tl96mgf072/config.h` 与 `keyboards/bvbhu/kbd67ble_ec/config.h`
-> 当前都取 `ANALOG_MAX_TRAVEL = 255`，即走窄格式一档；改成 >255 只需动板级 `config.h`
-> 这一行（GUI 侧全部由 `0xF0` 上报值驱动，无需重编）。
+> 参考板 `keyboards/bvbhu/tl96mgf072/config.h` 取 `ANALOG_MAX_TRAVEL = 255`（窄格式一档），
+> `keyboards/bvbhu/kbd67ble_ec/config.h` 取 `4000`（宽格式一档）——两块板刚好各覆盖一种宽度。
+> 改成另一种只需动板级 `config.h` 这一行（GUI 侧全部由 `0xF0` 上报值驱动，无需重编）。
 > 宽域实测代价（`tl96mgf072`，96 键）：`analog_key_t` 每键 +6 字节、ISF 的 `D[]`/`K[]`
 > 每键 +4 字节，合计约 +960 字节 RAM；该板在此之下已无 RAM 余量，加宽前需先腾出空间
 > （线性兜底/LINEAR_FAST 无 `D[]`/`K[]`，只多 ~576 字节）。
@@ -179,7 +182,21 @@ typedef struct __attribute__((packed)) {
 > 全部废弃，本基线从 **1** 重新起算，固件不留任何旧版本分支。
 > GUI 侧 `constants.py` 的 `ANALOG_PROTOCOL_VERSION` 与固件**等值匹配**，不等值即拒绝接管该标签页
 > （不支持 analog 的固件会把请求包原样回显，版本号是唯一可靠的挡板）。
+> 此外 GUI 还校验 `msg[6]` 与 `msg[8..9]` 是否自洽（见 §1.2），不一致同样拒绝接管——
+> 版本号相同但线格式宽度声明矛盾时，绝不带着错位偏移去解析。
 > `0xF6` 显式保存不是"某版本新增"，它就是当前协议的一部分。
+
+**版本史（唯一真源：固件 `quantum/vial.c` 的 `VIAL_ANALOG_PROTOCOL_VERSION`）**
+
+| 版本 | 日期 | 变更点 | 线格式宽度 |
+|---|---|---|---|
+| 1 | 2026-09-12 | 基线：`0xF0`–`0xF6` 子命令、推模型、`0xF2` 只写 RAM + `0xF6` 显式落盘、满量程动态宽度 | 窄 12 / 宽 16 |
+
+> **维护约定**：任何改动线格式或语义（字段含义、包长、命令号、节流规则）都必须同时
+> ①改固件 `VIAL_ANALOG_PROTOCOL_VERSION` ②改 GUI `protocol/constants.py` 的同名常量
+> ③在本表追加一行。GUI 侧有一条显式断言 `ANALOG_PROTOCOL_VERSION == 1`
+> （`test_gui.py::test_analog_protocol_version_pinned`），bump 时会先红——这就是提醒同步的信号。
+> 本表只记"当前存在过的版本"，不回填早期已废弃的开发期编号（见上）。
 
 ### 0xF0 `vial_analog_get_caps` —— 取能力
 
@@ -248,7 +265,9 @@ typedef struct __attribute__((packed)) {
 - 板级后端不可用（`raw < 0`）该条记 `sw=0, raw=0`
 - `start_ki >= num_keys` → `n=0`（GUI 据此结束轮询）
 - GUI 轮询：从 ki=0 起连续请求直到 `n=0`，刷新率由 GUI 控制（建议 60–100Hz 分批）
-- 节能：`flags.CONTINUOUS` 当前**不参与**本命令节流（核心状态机不读它，仅持久化+回报）
+- 节能：`flags.CONTINUOUS` 当前**不参与**本命令节流（核心状态机不读它，仅持久化+回报）。
+  该位是预留：GUI 既不设置也不展示，仅在 `.vil` 导出/导入时原样保留。
+  将来若实现节流（只上报置位了的键），须同时 bump 协议版本并更新 §2 版本史表。
 
 ### 0xF4 `vial_analog_calibrate` —— 校准采样
 

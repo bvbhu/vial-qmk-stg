@@ -555,9 +555,20 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
         case vial_analog_calibrate: {
             uint8_t  mode = msg[2];
             uint16_t ki   = msg[3] | ((uint16_t)msg[4] << 8);
-            uint16_t lo   = (ki == 0xFFFF) ? 0 : ki;
-            uint16_t hi   = (ki == 0xFFFF) ? (ANALOG_NUM_KEYS - 1) : ki;
             msg[0] = 1; /* 未知模式/参数越界默认报错 */
+
+            /* 触底校准开关先判：只看 mode、忽略 ki(见协议文档 §0xF4)，
+             * 故越界 ki 不影响这两个 mode。 */
+            if (mode == VIAL_ANALOG_CAL_BOTTOM_OUT_ON || mode == VIAL_ANALOG_CAL_BOTTOM_OUT_OFF) {
+                /* 纯运行态、不落盘(上次没关绝不能带到下次启动变砖)。
+                 * 期间扫描侧抑制输出并只推高各键 bottom_reading，见 tl96mgf072_matrix.c */
+                analog_set_bottom_out_mode(mode == VIAL_ANALOG_CAL_BOTTOM_OUT_ON);
+                msg[0] = 0;
+                break;
+            }
+
+            uint16_t lo = (ki == 0xFFFF) ? 0 : ki;
+            uint16_t hi = (ki == 0xFFFF) ? (ANALOG_NUM_KEYS - 1) : ki;
             if (lo >= ANALOG_NUM_KEYS || lo > hi) break;
             switch (mode) {
                 case VIAL_ANALOG_CAL_SAMPLE_REST:
@@ -582,13 +593,6 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
                     }
                     break;
                 }
-                case VIAL_ANALOG_CAL_BOTTOM_OUT_ON:
-                case VIAL_ANALOG_CAL_BOTTOM_OUT_OFF:
-                    /* 触底校准开关：纯运行态、不落盘(上次没关绝不能带到下次启动变砖)。
-                     * 期间扫描侧抑制输出并只推高各键 bottom_reading，见 tl96mgf072_matrix.c */
-                    analog_set_bottom_out_mode(mode == VIAL_ANALOG_CAL_BOTTOM_OUT_ON);
-                    msg[0] = 0;
-                    break;
                 case VIAL_ANALOG_CAL_RESET:
                     /* 恢复出厂锚点(非 0/255：锚点是原始 ADC 域物理量，0 会让模型失效到重开机) */
                     for (uint16_t i = lo; i <= hi; i++) {
