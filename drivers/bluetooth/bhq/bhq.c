@@ -131,9 +131,19 @@ void BHQ_SendCmd(uint8_t isack, uint8_t *dat, uint8_t datLength)
     uint8_t index = 0;
     uint16_t crc = 0;
     uint8_t i = 0;
-    uint8_t pkt[128] = {0};
-    memset(pkt, 0, 128);
+    /* 帧总长 = 帧头2 + LEN1 + DATA(datLength) + CRC2 + 帧尾1 = datLength + 6。
+     * 最大 DATA 是 0x11 SET_CONFIG 满配的 128B → 帧长 134B。
+     * 原为 pkt[128]：满配时越界写 6 字节(栈破坏，静默难查)，故改为按上限开缓冲。 */
+    uint8_t pkt[BHQ_FRAME_MAX_LEN] = {0};
+    memset(pkt, 0, sizeof(pkt));
     isack = isack;
+
+    /* 守卫：datLength 超出本缓冲可容纳的 DATA 上限时丢弃整帧，绝不越界写。
+     * BHQ_SendCmd 是通用接口，调用方可能传入任意长度。 */
+    if (datLength > (uint8_t)(BHQ_FRAME_MAX_LEN - 6)) {
+        bhq_printf("BHQ_SendCmd: datLength %d too large, dropped\n", datLength);
+        return;
+    }
 
     pkt[index++] = BHQ_FRAME_HEADER_1;          
     pkt[index++] = BHQ_FRAME_HEADER_2;          
@@ -237,6 +247,95 @@ void bhq_update_battery_percent(uint8_t percent, uint16_t bat_mv) {
     bhkBuff[index++] = BHQ_L_UINT16(bat_mv);      
     bhkBuff[index++] = BHQ_H_UINT16(bat_mv);  
     BHQ_SendCmd(BHQ_ACK, bhkBuff,index);
+}
+
+/* 0x11 SET_CONFIG (移植自上游 dev_rtc_test)
+ * 线格式: [0x11][vendor_id_source][vid_L][vid_H][pid_L][pid_H]
+ *         [conn_min_L][conn_min_H][conn_max_L][conn_max_H][timeout_L][timeout_H]
+ *         [tx_poweer][mk_is_read_battery_voltage][mk_adc_pga]
+ *         [r1_L][r1_H][r2_L][r2_H][sleep1_L][sleep1_H][sleep2_L][sleep2_H]
+ *         [bleNameLen][bleName...][swiftLen][swift...][usbLen][usb...][usbVendorLen][usbVendor...]
+ * 用 BHQ_NOT_ACK 发送(与上游一致)。
+ * 注意: 不含命令码的固定部分为 22B, 加上 4 个名称长度字节 = 26B, 再加名称内容;
+ *       最大 = 1 + 22 + 4 + (21+16+32+32) = 128B, 需桥侧 BHQ_MAX_DATA_LEN >= 128。 */
+void bhq_ConfigParam(bhqDevConfigInfo_t parma)
+{
+    uint8_t i = 0;
+    uint8_t index = 0;
+    memset(bhkBuff, 0, PACKET_MAX_LEN);
+
+    // ---- 名称长度拦截校验,超长截断 (与上游一致) ----
+    if (parma.bleNameStrLength > BLE_ADVERT_NAME_MAX) {
+        parma.bleNameStrLength = BLE_ADVERT_NAME_MAX;
+    }
+    if (parma.bleSwiftPairNameStrLength > BLE_SWIFT_PAIR_NAME_MAX) {
+        parma.bleSwiftPairNameStrLength = BLE_SWIFT_PAIR_NAME_MAX;
+    }
+    if (parma.usbNameStrLength > USB_NAME_MAX) {
+        parma.usbNameStrLength = USB_NAME_MAX;
+    }
+    if (parma.usbVendorNameStrLength > USB_VENDOR_NAME_MAX) {
+        parma.usbVendorNameStrLength = USB_VENDOR_NAME_MAX;
+    }
+
+    bhkBuff[index++] = 0x11;
+    bhkBuff[index++] = parma.vendor_id_source;
+    bhkBuff[index++] = BHQ_L_UINT16(parma.verndor_id);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.verndor_id);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.product_id);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.product_id);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.le_connection_interval_min);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.le_connection_interval_min);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.le_connection_interval_max);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.le_connection_interval_max);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.le_connection_interval_timeout);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.le_connection_interval_timeout);
+
+    bhkBuff[index++] = parma.tx_poweer;
+    bhkBuff[index++] = parma.mk_is_read_battery_voltage;
+    bhkBuff[index++] = parma.mk_adc_pga;
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.mk_rvd_r1);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.mk_rvd_r1);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.mk_rvd_r2);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.mk_rvd_r2);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.sleep_1_s);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.sleep_1_s);
+
+    bhkBuff[index++] = BHQ_L_UINT16(parma.sleep_2_s);
+    bhkBuff[index++] = BHQ_H_UINT16(parma.sleep_2_s);
+
+    bhkBuff[index++] = parma.bleNameStrLength;
+    for (i = 0; i < parma.bleNameStrLength; i++)
+    {
+        bhkBuff[index++] = parma.bleNameStr[i];
+    }
+
+    bhkBuff[index++] = parma.bleSwiftPairNameStrLength;
+    for (i = 0; i < parma.bleSwiftPairNameStrLength; i++)
+    {
+        bhkBuff[index++] = parma.bleSwiftPairNameStr[i];
+    }
+
+    bhkBuff[index++] = parma.usbNameStrLength;
+    for (i = 0; i < parma.usbNameStrLength; i++)
+    {
+        bhkBuff[index++] = parma.usbNameStr[i];
+    }
+
+    bhkBuff[index++] = parma.usbVendorNameStrLength;
+    for (i = 0; i < parma.usbVendorNameStrLength; i++)
+    {
+        bhkBuff[index++] = parma.usbVendorNameStr[i];
+    }
+
+    BHQ_SendCmd(BHQ_NOT_ACK, bhkBuff, index);
 }
 
 

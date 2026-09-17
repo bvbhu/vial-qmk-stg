@@ -29,6 +29,65 @@ enum {
 #define PACKECT_HEADER_LEN  4
 #define PACKET_MAX_LEN      256
 
+/* 单帧线上最大长度 = 帧头2 + LEN1 + DATA(BHQ_MAX_DATA_LEN) + CRC2 + 帧尾1 = 138。
+ * BHQ_SendCmd() 的组帧缓冲必须 >= 本值，否则 0x11 SET_CONFIG 满配(128B DATA)
+ * 会越界写栈(历史 bug: pkt[128] 时溢出 6 字节)。 */
+#define BHQ_MAX_DATA_LEN    132
+#define BHQ_FRAME_MAX_LEN   (BHQ_MAX_DATA_LEN + 6)   /* 138 */
+
+/* ---------------------------------------------------------------------------
+ *  0x11 SET_CONFIG (移植自上游 dev_rtc_test, 提交 15855730「添加bhq 0x11 配置指令」)
+ *
+ *  一次性下发 蓝牙连接参数/发送功率/休眠/四组名称/VID-PID。
+ *  线格式见 wch-ble-bridge/uart_protocol.md §3.2。
+ *  上游同名同值, 两侧必须一致。
+ * ------------------------------------------------------------------------- */
+// 蓝牙名称最大值
+#define BLE_ADVERT_NAME_MAX     (21)
+// Swift Pair 的配对名称
+#define BLE_SWIFT_PAIR_NAME_MAX (16)
+
+// USB 名称最大值 (usbdog USB 描述符使用)
+#define USB_NAME_MAX            32
+#define USB_VENDOR_NAME_MAX     32
+
+// -------------------- bhqDevConfigInfo_t: 0x11 配置命令数据区 --------------------
+typedef struct
+{
+// ------------------------------------ 蓝牙的配置信息 ------------------------------------
+    uint16_t le_connection_interval_min;        // 最小连接间隔(单位 1.25ms) 推荐6
+    uint16_t le_connection_interval_max;        // 最大连接间隔(单位 1.25ms) 推荐35
+    uint16_t le_connection_interval_timeout;    // 连接间隔超时 推荐500
+    uint8_t  tx_poweer;                         // 蓝牙发送功率
+
+    uint8_t  mk_is_read_battery_voltage;        // 是否由模块读取电池电压(废弃,填0)
+    uint8_t  mk_adc_pga;                        // ADC增益(废弃,填0)
+    uint16_t mk_rvd_r1;                         // 上接电池正极电阻(kΩ)(废弃,填0)
+    uint16_t mk_rvd_r2;                         // 下接电池负极(GND)电阻(kΩ)(废弃,填0)
+
+    uint16_t sleep_1_s;                         // 一级休眠(秒)
+    uint16_t sleep_2_s;                         // 二级休眠/关机(秒)
+
+    uint8_t bleNameStrLength;                   // 蓝牙广播名称长度
+    uint8_t bleNameStr[BLE_ADVERT_NAME_MAX];
+
+    uint8_t bleSwiftPairNameStrLength;          // Swift Pair Display Name 长度
+    uint8_t bleSwiftPairNameStr[BLE_SWIFT_PAIR_NAME_MAX];
+
+// ------------------------------------ USB 的配置信息 ------------------------------------
+    uint8_t usbNameStrLength;                   // USB 名称(产品名)长度
+    uint8_t usbNameStr[USB_NAME_MAX];
+
+    uint8_t usbVendorNameStrLength;             // USB 厂商名称长度
+    uint8_t usbVendorNameStr[USB_VENDOR_NAME_MAX];
+
+// ------------------------------------ 通用的配置信息 ------------------------------------
+    uint8_t  vendor_id_source;                  // 0: Bluetooth SIG, 1: USB-IF
+    uint16_t verndor_id;                        // 供应商id
+    uint16_t product_id;                        // 产品标识id
+} bhqDevConfigInfo_t;
+// -------------------- bhqDevConfigInfo_t: 0x11 配置命令数据区 --------------------
+
 // -------------------- bhq protocol Small terminal mode --------------------
 
 #define BHQ_FRAME_HEADER_1  0x5D
@@ -78,6 +137,10 @@ void bhq_CloseBleAdvertising(void);
 void bhq_switch_rf_easy_kb(uint8_t host_index,uint16_t timeout_1S);
 void bhq_switch_rf_easy_kb_pair(uint8_t host_index,uint16_t timeout_1S);
 void bhq_update_battery_percent(uint8_t percent, uint16_t bat_mv);
+
+/* 0x11 SET_CONFIG: 下发完整配置(连接参数/功率/休眠/四组名称/VID-PID)。
+ * 用 BHQ_NOT_ACK 发送; 桥侧回 0x91 [sta] (上游当前未处理该 ACK)。 */
+void bhq_ConfigParam(bhqDevConfigInfo_t parma);
 
 
 bool via_command_bhq(uint8_t *data, uint8_t length);
