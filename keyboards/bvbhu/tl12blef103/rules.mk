@@ -64,6 +64,8 @@ KB_CHECK_BATTERY_ENABLED = yes
 # (x8 = 64k / xB = 128k, 见 platforms/chibios/boards/STM32_F103_STM32DUINO/ld/)
 MCU_LDSCRIPT = STM32F103x8
 
+KB_DEBUG = no
+
 # kb_common 源码查找路径
 VPATH += $(TOP_DIR)/keyboards/keymagichorse
 

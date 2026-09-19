@@ -22,6 +22,7 @@
     #include "SEGGER_RTT.h"
 #elif defined(KB_DEBUG_UART_BHQ)
     #include "uart.h"
+    #include "hal.h" /* UART_DRIVER(SD2)/SD_READY: 驱动就绪守卫用 */
 #endif
 
 int8_t km_putchar(uint8_t c);
@@ -43,7 +44,13 @@ int8_t km_putchar(uint8_t c)
 #if defined(KB_DEBUG_RTT)
     SEGGER_RTT_printf(0, "%c", c);
 #elif defined(KB_DEBUG_UART_BHQ)
-    uart_write(c);
+    /* board_init() 早于 uart_init()(board_init 经 halInit()->boardInit() 调用,
+     * 此时 chSysInit()/UART 驱动都未初始化)。对全零驱动 sdPut 会走
+     * oqPutTimeout(TIME_INFINITE): 队列恒"满" -> 挂起尚不存在的当前线程
+     * -> HardFault 死循环(开机挂死、灯不亮)。驱动未就绪时丢弃输出。 */
+    if (UART_DRIVER.state == SD_READY) {
+        uart_write(c);
+    }
 #endif
     return 0;
 }

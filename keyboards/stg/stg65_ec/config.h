@@ -97,10 +97,13 @@
 #   define USB_POWER_CONNECTED_LEVEL   1
 
 #   define UART_DRIVER          SD2
+/* STM32F411 是 GPIOv2，AF7 = USART2 的 TX/RX，故 PA2/PA3 的复用功能号是 7。
+ * 不写裸值：板子换到 F1(GPIOv1，复用功能无编号)后裸值即非法。
+ * PAL_MODE_ALTERNATE(7) 在 GPIOv2 上与旧裸值等价，但语义更明确。 */
 #   define UART_TX_PIN          A2
-#   define UART_TX_PAL_MODE     7
+#   define UART_TX_PAL_MODE     PAL_MODE_ALTERNATE(7)
 #   define UART_RX_PIN          A3
-#   define UART_RX_PAL_MODE	    7
+#   define UART_RX_PAL_MODE     PAL_MODE_ALTERNATE(7)
 
 // STM32使用到的高速晶振引脚号，做低功耗需要用户配置，每款芯片有可能不一样的
 #define LPM_STM32_HSE_PIN_IN     H1

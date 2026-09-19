@@ -12,6 +12,7 @@
  */
 #include "tl12blef103.h"
 #include "timer.h" /* timer_read32 / timer_elapsed32 */
+#include "ws2812.h" /* 唤醒后重配 WS2812 数据脚 (ws2812_init) */
 
 #if defined(BLUETOOTH_BHQ)
 #    include "km_printf.h" /* km_printf: KB_DEBUG 未开时为空实现 */
@@ -30,8 +31,41 @@ void board_init(void) {
 #endif
 #if defined(KB_LPM_ENABLED)
     lpm_init(); /* F103 STOP + 矩阵 GPIO 唤醒 */
+
+    /* 补回 USB 检测脚(A6)的内部下拉。
+     * lpm_init() 会把 A6 改回浮空(撤销 bhq_common_init() 设的下拉),
+     * A6 悬空会导致 usb_power_connected() 读值不定。放在 lpm_init() 之后才有效。 */
+    gpio_set_pin_input_low(USB_POWER_SENSE_PIN);
 #endif
 }
+
+/* ============================================================================
+ *  休眠时关闭 RGB / 唤醒后恢复
+ *
+ *  WS2812 是锁存器件, STOP 后停止推送数据时灯珠会保持最后一帧继续耗电。
+ *  通过覆写 lpm_core.c 的 weak 函数 lpm_device_power_close/open 实现:
+ *    close(): WFI 前推一帧全黑熄灭灯珠
+ *    open():  唤醒后重配 WS2812 引脚(halInit() 会冲掉输出模式)并补推一帧
+ *
+ *  注意: 不要用 rgb_matrix_disable/enable 配对。disable 只改配置不推数据帧,
+ *  唤醒后灯珠停在休眠前的全黑帧上, 直到效果下次重绘才恢复(实测灯不亮)。
+ *  从不禁用矩阵: 进 STOP 后 rgb_matrix_task() 本就不跑, disable 无收益只增坑。
+ * ========================================================================= */
+#if defined(KB_LPM_ENABLED) && defined(RGB_MATRIX_ENABLE)
+
+void lpm_device_power_close(void) {
+    rgb_matrix_set_color_all(0, 0, 0);
+    rgb_matrix_update_pwm_buffers();     /* 推一帧全黑; WS2812 锁存后熄灭 */
+}
+
+void lpm_device_power_open(void) {
+    /* halInit()/lpm_chip_clock_init() 会冲掉 WS2812 数据脚的输出模式,
+     * 这里补回。缺了它表现为"唤醒后灯不亮"。 */
+    ws2812_init();
+    rgb_matrix_update_pwm_buffers();
+}
+
+#endif /* KB_LPM_ENABLED && RGB_MATRIX_ENABLE */
 
 /* ============================================================================
  *  0x11 SET_CONFIG 发送端

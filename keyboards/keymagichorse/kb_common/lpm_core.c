@@ -598,16 +598,25 @@ void lpm_task(void) {
         return;
     }
 
-    // 桥状态未知(尚未收到任何 0x93 状态帧)时同样不计时。
-    // wt_state 要等桥主动上报才更新, 上电到首帧之间有窗口; 若此时就开始倒计时,
-    // 用户在窗口内发起配对(长按 BT1 开 30s 配对)会赶在状态帧之前把 RUN_MODE_PROCESS_TIME
-    // 耗完 -> 键盘在配对等待中自动休眠(休眠前 sdStop 停串口, 桥侧还在广播但主控已睡),
-    // 表现为"配对等到键盘自己睡着"。状态未知时视为"可能有活动", 复位计时器。
+    // 桥状态未知(尚未收到 0x93 状态帧)时不计时, 避免配对窗口内自动休眠。
+    // 但原实现把"未知"当作永久阻断——桥只在 GAP 状态变化时发一次 0x93, 一旦
+    // 丢失(如 RX 线故障)就永久失眠。现加开机宽限期: 超过后按正常节奏计时休眠。
+    // 可用 config.h 的 LPM_UNKNOWN_STATE_GRACE_MS 覆盖。
     wt_state_t wst = wireless_get();
     if (wst == WT_STATE_INITIALIZED || wst == WT_STATE_RESET) {
-        lpm_time_up      = false;
-        lpm_timer_buffer = 0;
-        return;
+#ifndef LPM_UNKNOWN_STATE_GRACE_MS
+#    define LPM_UNKNOWN_STATE_GRACE_MS (1000 * 60)
+#endif
+        static uint32_t lpm_unknown_state_tick = 0;
+        if (lpm_unknown_state_tick == 0) {
+            lpm_unknown_state_tick = sync_timer_read32();
+        }
+        if (sync_timer_elapsed32(lpm_unknown_state_tick) < LPM_UNKNOWN_STATE_GRACE_MS) {
+            lpm_time_up      = false;
+            lpm_timer_buffer = 0;
+            return;
+        }
+        /* 宽限期已过, 仍未知 -> 视为"无状态可等", 继续走后面的正常计时 */
     }
 
     // ---------- VIA 活动保护 ----------
