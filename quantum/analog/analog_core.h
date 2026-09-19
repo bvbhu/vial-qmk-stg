@@ -139,10 +139,18 @@ int16_t analog_get_tracked_raw(void);     /* raw 走板级钩子；未跟踪或�
  * 开启时扫描侧抑制全部键输出(等效 KC_NO)、状态机不推进，读数照常采样；
  * 扫描侧把"读得比当前 bottom 更深"的值喂给 analog_set_bottom_reading(只推高)，
  * 用户逐个按满每个键即可完成触底校准，关闭即结束。
- * 纯运行态、开机默认关：上一次没关绝不能带到下次启动，否则键盘变砖。 */
+ * 纯运行态、开机默认关：上一次没关绝不能带到下次启动，否则键盘变砖。
+ *
+ * 唯一的正常出口是上位机发 0xF4 mode5，故固件侧备了两道兜底：
+ *   ① 开机默认关 —— analog_init() 显式复位(冷启动靠 BSS，但复位/STOP 恢复不清 BSS)
+ *   ② 无心跳超时自动关 —— analog_task() 按 ANALOG_BOTTOM_OUT_TIMEOUT_MS
+ *      (默认 60s，板级 config.h 可覆盖)判定 */
 extern bool g_analog_bottom_out_mode;
 void analog_set_bottom_out_mode(bool on);
 bool analog_get_bottom_out_mode(void);
+
+/* 续期心跳(兜底②)：由 vial.c 处理 0xF4 时调用。 */
+void analog_bottom_out_heartbeat(void);
 
 /* ---- 6. 编译期出厂默认值(板级 config.h 覆盖) ----
  * TL96MG(Hall) 阈值与 ADC 锚点取自参考实现；RT 默认关=出厂即纯阈值滞回。 */
@@ -249,7 +257,11 @@ int16_t analog_backend_get_raw_adc(uint16_t ki);
  * 行程域宽度写进记录尺寸(8 -> 12)会改变 SIZE，而记录里的 record_bytes 与
  * version 一起构成作废判据，故换宽度的板子开机即整区作废重写，不会读到错位的旧数据。 */
 #define ANALOG_PERSIST_MAGIC         0x474E4156u /* "VANG"，小端存放 */
-#define ANALOG_PERSIST_VERSION       2u          /* 2：行程域宽度可变(4 项配置由 uint8 变 analog_travel_t) */
+/* EEPROM 布局版本(§9)：与 magic / num_keys / record_bytes 构成 persist_load 的
+ * 作废判据，版本不符整区重写。 1=初版；2=行程域宽度可变(记录尺寸 8->12)。
+ * 改动落盘布局须 bump 本宏。**与 VIAL_ANALOG_PROTOCOL_VERSION(quantum/vial.c，
+ * 空口命令线格式版本)语义无关、取值不同，无联动**——改其一不必动另一个。 */
+#define ANALOG_PERSIST_VERSION       2u
 
 /* 字段顺序即落盘布局；改动须 bump ANALOG_PERSIST_VERSION。
  * reserved 把记录补齐到偶数字节：记录地址全落在偶地址(FEE 按半字写最优)，

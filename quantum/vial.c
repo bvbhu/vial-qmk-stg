@@ -101,7 +101,9 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
  * 写全局经 analog_set_global 级联刷新所有跟随键，GUI 无需(也不应)逐键补写。 */
 
 /* 协议版本基线号；线格式/语义改动须 bump，GUI constants.py 同步。
- * 版本史已重置，从 1 起算，不留旧版本分支。 */
+ * 版本史已重置，从 1 起算，不留旧版本分支。
+ * 与 ANALOG_PERSIST_VERSION(analog_core.h §9，EEPROM 布局版本)语义无关、
+ * 取值也不同：本宏管空口命令线格式，那个管落盘记录能否复用，改其一不必动另一个。 */
 #define VIAL_ANALOG_PROTOCOL_VERSION 1
 
 /* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，板级可覆盖 */
@@ -556,6 +558,10 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
             uint8_t  mode = msg[2];
             uint16_t ki   = msg[3] | ((uint16_t)msg[4] << 8);
             msg[0] = 1; /* 未知模式/参数越界默认报错 */
+
+            /* 收到任何 0xF4 都续期触底校准的超时心跳(analog_core.h §5.5 兜底②)：
+             * 只要 GUI 还在轮询/操作，模式就不会被自动关掉；GUI 消失则超时自关。 */
+            analog_bottom_out_heartbeat();
 
             /* 触底校准开关先判：只看 mode、忽略 ki(见协议文档 §0xF4)，
              * 故越界 ki 不影响这两个 mode。 */

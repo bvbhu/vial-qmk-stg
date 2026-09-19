@@ -63,11 +63,7 @@ _Static_assert(ANALOG_NUM_KEYS <= 255, "持久化头部 num_keys 是单字节");
  * 注意**出厂默认锚点(375/675)不在 clamp 域内**：域是 [GUARD, DEFAULT_TOP-GUARD] 与
  * [DEFAULT_BOTTOM+GUARD, ∞)，默认值由 fill_defaults() 直写、不经 clamp。所以
  * "top < bottom" 由 DEFAULT_BOTTOM > DEFAULT_TOP 保证，而不是由 clamp 保证；
- * 用 clamp 的界去推导依赖锚点跨度的量(如 ISF 的 D)时必须改用 DEFAULT_* 原始值。
- *
- * 另一处易混：**ANALOG_PERSIST_VERSION(本文件 §9，EEPROM 布局版本) 与
- * VIAL_ANALOG_PROTOCOL_VERSION(quantum/vial.c，线路协议版本) 语义无关、取值不同**，
- * 改动其一不必动另一个。 */
+ * 用 clamp 的界去推导依赖锚点跨度的量(如 ISF 的 D)时必须改用 DEFAULT_* 原始值。 */
 
 /* 噪声带必须比边界窄：否则 clamp_top_reading 的下界会高于上界，两条边界打架。
  * 这是 ANALOG_CAL_GUARD 唯一的结构性约束，编译期抓比运行期出怪值好。 */
@@ -256,7 +252,26 @@ static bool persist_load(void) {
     return true;
 }
 
+/* 心跳超时(见下方 analog_task)。默认 60s：触底校准要逐个按满全部键，给足人手速；
+ * 板级可用 config.h 覆盖。 */
+#ifndef ANALOG_BOTTOM_OUT_TIMEOUT_MS
+#    define ANALOG_BOTTOM_OUT_TIMEOUT_MS 60000u
+#endif
+
+/* 触底校准心跳计时器(§5.5)：定义在下方，但 analog_task 要用，故前置声明。 */
+static uint32_t g_bottom_out_last_cmd;
+
 void analog_task(void) {
+    /* §5.5 兜底②：无心跳超时自动关。
+     * 判据：进入模式后无任何 0xF4 命令续期即超时。GUI 的 20ms 轮询会持续发
+     * analog 命令续期；GUI 消失则必然超时。
+     * 必须在下方 dirty 早退之前：本模式不落盘、脏位恒 0，放后面永远不被检查。 */
+    if (g_analog_bottom_out_mode) {
+        if ((uint32_t)(timer_read32() - g_bottom_out_last_cmd) >= ANALOG_BOTTOM_OUT_TIMEOUT_MS) {
+            analog_set_bottom_out_mode(false);
+        }
+    }
+
     bool dirty = g_persist_dirty_global;
     for (uint16_t i = 0; i < sizeof(g_persist_dirty) && !dirty; i++) dirty = (g_persist_dirty[i] != 0);
     if (!dirty) return;
@@ -327,6 +342,12 @@ static void fill_defaults(void) {
 void analog_init(void) {
     if (g_initialized) return;
     fill_defaults(); /* 先给全字段(含 top_reading 开机值)一个合法出厂值 */
+
+    /* §5.5 开机默认关。冷启动靠 BSS 初值即可，但看门狗/软复位(NVIC_SystemReset)
+     * 与 STOP 恢复不清 BSS，上一轮的 true 会被带回，故显式复位。
+     * 走 setter 顺带清按下位，与"进入即清"同一条语义。 */
+    analog_set_bottom_out_mode(false);
+
     if (!persist_load()) persist_flush_all(); /* 首次上机/布局变更/校验失败：写成合法区 */
     /* 锚点已定(出厂或 EEPROM)，重算模型派生参数(ISF 的 D/K 等) */
     for (uint16_t i = 0; i < ANALOG_NUM_KEYS; i++) {
@@ -548,8 +569,15 @@ void analog_persist_commit(void) {
 /* ---- 触底校准模式(§5.5，运行态) ---- */
 bool g_analog_bottom_out_mode = false;
 
+void analog_bottom_out_heartbeat(void) {
+    g_bottom_out_last_cmd = timer_read32();
+}
+
 void analog_set_bottom_out_mode(bool on) {
     g_analog_bottom_out_mode = on;
+    /* 开关两个方向都续期：关掉之后计时器不该继续朝超时跑，否则下次进入模式时
+     * 可能一进来就已"超时"(前一次模式是很久以前关的)。 */
+    analog_bottom_out_heartbeat();
     if (on) {
         /* 进入即清全部按下位：模式期间扫描侧清零矩阵位，退出后不残留"幽灵按下"。
          * 不通知模型层(锚点没变)，也不标脏(运行态不落盘)。 */
