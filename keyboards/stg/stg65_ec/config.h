@@ -75,18 +75,14 @@
 
 // *********************************************** Vial analog 出厂默认值 ***********************************************
 // 行程域：sw = (absv - top) * M / (bottom - top)，M = ANALOG_MAX_TRAVEL(见下)。absv 为原始 ADC 读数。
-// 核心钳位 top ≤ DEFAULT_TOP-8、bottom ≥ DEFAULT_BOTTOM+8；开机实测静置读数重写 top。
-#define ANALOG_DEFAULT_TOP_READING 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
-#define ANALOG_DEFAULT_BOTTOM_READING 900      /* 触底锚点初值(可被校准推至1023) */
-#define ANALOG_DEFAULT_ACTUATION_THRESHOLD 3000  /* 触发行程(0..ANALOG_MAX_TRAVEL) */
-#define ANALOG_DEFAULT_RELEASE_THRESHOLD 1000    /* 释放行程(0..ANALOG_MAX_TRAVEL，与触发点相距 2000 = 半量程) */
+#define ANALOG_TOPREADING_MAX 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
+#define ANALOG_BOTTOMREADING_MIN 900      /* 触底锚点初值(可被校准推至1023) */
+#define ANALOG_DEFAULT_ACTUATION_THRESHOLD 0xA00  /* 触发行程(0..ANALOG_MAX_TRAVEL) */
+#define ANALOG_DEFAULT_RELEASE_THRESHOLD 0x600    /* 释放行程(0..ANALOG_MAX_TRAVEL) */
 #define CALIBRATION_THRESHOLD 32               /* 实时校准：偏离锚点超过该ADC计数才更新 */
 
-// 行程域满量程(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 EC 锚点跨度约 300-400 ADC 计数，
-// 但满量程取 4000 换取细粒度滑块(行程域与 ADC 计数无关，只是刻度密度)。
-// 满量程 >255 使行程域升 uint16：配置/记录/读数线格式随之从 12/8/3 变为 16/12/4 字节，
-// 出厂阈值必须同步改小否则静态断言直接编译失败。
-#define ANALOG_MAX_TRAVEL 4000
+// 行程域满量程(0=顶部, M=触底)。
+#define ANALOG_MAX_TRAVEL 0xFFF
 // *********************************************** Vial analog 出厂默认值 ***********************************************
 
 #ifdef BLUETOOTH_BHQ
@@ -97,13 +93,12 @@
 #   define USB_POWER_CONNECTED_LEVEL   1
 
 #   define UART_DRIVER          SD2
-/* STM32F411 是 GPIOv2，AF7 = USART2 的 TX/RX，故 PA2/PA3 的复用功能号是 7。
- * 不写裸值：板子换到 F1(GPIOv1，复用功能无编号)后裸值即非法。
- * PAL_MODE_ALTERNATE(7) 在 GPIOv2 上与旧裸值等价，但语义更明确。 */
+/* 裸 AF 编号（PA2/PA3 的 USART2 为 7）：uart_serial.c 的 GPIOv2 分支会再包一层 PAL_MODE_ALTERNATE()。
+ * GPIOv1 板子不做包装、直接透传，那里须写完整 PAL mode（如 PAL_MODE_STM32_ALTERNATE_PUSHPULL）。 */
 #   define UART_TX_PIN          A2
-#   define UART_TX_PAL_MODE     PAL_MODE_ALTERNATE(7)
+#   define UART_TX_PAL_MODE     7
 #   define UART_RX_PIN          A3
-#   define UART_RX_PAL_MODE     PAL_MODE_ALTERNATE(7)
+#   define UART_RX_PAL_MODE     7
 
 // STM32使用到的高速晶振引脚号，做低功耗需要用户配置，每款芯片有可能不一样的
 #define LPM_STM32_HSE_PIN_IN     H1

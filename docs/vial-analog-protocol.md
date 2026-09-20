@@ -1,7 +1,7 @@
 # Vial Analog Protocol Extension (磁轴 / 静电容)
 
 > 契约文档：定义固件侧 `vial-qmk-wireless` 与 GUI/Web 侧之间的"模拟行程"通信协议。
-> **行程量纲是 `0..ANALOG_MAX_TRAVEL` 的整数刻度（板级编译期可配，默认 255），不使用 mm。**
+> **行程量纲是 `0..ANALOG_MAX_TRAVEL` 的整数刻度（kb 编译期可配，默认 255），不使用 mm。**
 > 固件实现见 `quantum/vial.c`(协议层) 与 `quantum/analog/analog_core.h`(核心层)，
 > 命令号枚举见 `quantum/vial.h`。协议版本 `VIAL_ANALOG_PROTOCOL_VERSION = 1`。
 
@@ -20,19 +20,19 @@
 **固件是按下状态的唯一权威**，上报是被动查询，不是协议驱动状态机：
 
 ```
-板级 matrix_scan()                      核心 (quantum/analog)
+kb matrix_scan()                      核心 (quantum/analog)
   ├─ adc_read()            取原始 ADC
-  ├─ absv = |adc - 2048|   转成差值域        ← 板级决定，核心不碰 ADC
-  ├─ analog_model_sw(ki, absv) → sw 0..M    ← 键程模型(板级选编，全 weak)
+  ├─ absv = |adc - 2048|   转成差值域        ← kb 决定，核心不碰 ADC
+  ├─ analog_model_sw(ki, absv) → sw 0..M    ← 键程模型(kb 选编，全 weak)
   └─ analog_step_key(ki, sw) ──────────────→ 状态机推进，返回 true = 按下状态翻转
-                                             └─ 板级据此翻 matrix[row] 的位
+                                             └─ kb 据此翻 matrix[row] 的位
 ```
 
 要点：
 
 - **核心只见 `0..ANALOG_MAX_TRAVEL` 行程域**，`top_reading`/`bottom_reading` 是键程模型在
   **原始 ADC 域**的校准锚点，核心只负责存储、持久化与在变更时回调模型（`analog_backend_calibration_changed`）。
-- 行程映射**不是**协议层的线性归一化，而是板级选定的模型（见 §4.1）。协议只传锚点与阈值。
+- 行程映射**不是**协议层的线性归一化，而是 kb 选定的模型（见 §4.1）。协议只传锚点与阈值。
 - GUI 的 `0xF3` 实时查询与 `0xF1` 配置读写**都不会**改变按下状态。
 
 ### 1.2 线格式每键配置 `vial_analog_wire_config_t`（12 / 16 字节，0xF1/0xF2 用）
@@ -127,7 +127,7 @@ typedef struct __attribute__((packed)) {
 
 ### 1.5 最大键程与行程域动态宽度
 
-`ANALOG_MAX_TRAVEL` 是**行程域的满量程**，在板级 `config.h` 定义
+`ANALOG_MAX_TRAVEL` 是**行程域的满量程**，在 kb `config.h` 定义
 （`quantum/analog/analog_core.h` 里 `#ifndef` 默认 255）。语义：
 
 - 行程域是 `0..ANALOG_MAX_TRAVEL` 的整数刻度，`0` = 顶部（静置/释放）、
@@ -166,7 +166,7 @@ typedef struct __attribute__((packed)) {
 
 > 参考板 `keyboards/bvbhu/tl96mgf072/config.h` 取 `ANALOG_MAX_TRAVEL = 255`（窄格式一档），
 > `keyboards/bvbhu/kbd67ble_ec/config.h` 取 `4000`（宽格式一档）——两块板刚好各覆盖一种宽度。
-> 改成另一种只需动板级 `config.h` 这一行（GUI 侧全部由 `0xF0` 上报值驱动，无需重编）。
+> 改成另一种只需动 kb `config.h` 这一行（GUI 侧全部由 `0xF0` 上报值驱动，无需重编）。
 > 宽域实测代价（`tl96mgf072`，96 键）：`analog_key_t` 每键 +6 字节、ISF 的 `D[]`/`K[]`
 > 每键 +4 字节，合计约 +960 字节 RAM；该板在此之下已无 RAM 余量，加宽前需先腾出空间
 > （线性兜底/LINEAR_FAST 无 `D[]`/`K[]`，只多 ~576 字节）。
@@ -221,7 +221,7 @@ typedef struct __attribute__((packed)) {
   bit4 每键断开阈值、bit5 `BOTTOM_OUT_CAL`（支持 `0xF4` mode4/5 触底校准开关）
   → 当前上报 `0x3F`。bit6 `AUTO_CAL` **预留未实现**（未置位，`AUTO_PEAK` mode3 返错）。
 - `axis_type` 由编译期 `ANALOG_PROTOCOL_AXIS_TYPE` 推导（默认磁轴；定义
-  `ANALOG_MODEL_EC` 时为静电容），板级可覆盖。核心层不持轴概念。
+  `ANALOG_MODEL_EC` 时为静电容），kb 可覆盖。核心层不持轴概念。
 
 ### 0xF1 `vial_analog_get_key_config` —— 取单键配置+锚点
 
@@ -260,9 +260,9 @@ typedef struct __attribute__((packed)) {
     - 宽 `E=4`：`[sw_lo][sw_hi][raw_lo][raw_hi]`（`sw` 小端 2 字节）
     - 两种宽度下 `raw` 都是小端 16 位，且都排在 `sw` 之后
   - 条目从 `start_ki` 起连续排列
-- 取值来源：`raw` = 板级钩子 `analog_backend_get_raw_adc(ki)`；
+- 取值来源：`raw` = kb 钩子 `analog_backend_get_raw_adc(ki)`；
   `sw` = `analog_model_sw(ki, raw)` **即时换算**（非读取状态机内部值，故与触发判定同源）
-- 板级后端不可用（`raw < 0`）该条记 `sw=0, raw=0`
+- kb 后端不可用（`raw < 0`）该条记 `sw=0, raw=0`
 - `start_ki >= num_keys` → `n=0`（GUI 据此结束轮询）
 - GUI 轮询：从 ki=0 起连续请求直到 `n=0`，刷新率由 GUI 控制（建议 60–100Hz 分批）
 - 节能：`flags.CONTINUOUS` 当前**不参与**本命令节流（核心状态机不读它，仅持久化+回报）。
@@ -279,14 +279,14 @@ typedef struct __attribute__((packed)) {
   |------|------|----------|
   | 0 | `SAMPLE_REST` | 以各键当前 `raw` 写 `top_reading`（要求用户松开所有键）|
   | 1 | `SAMPLE_FULL` | 以各键当前 `raw` 写 `bottom_reading`（要求用户按下到底）|
-  | 2 | `RESET_CAL` | 锚点恢复编译期出厂值 `ANALOG_DEFAULT_TOP/BOTTOM_READING` |
+  | 2 | `RESET_CAL` | 锚点恢复编译期出厂值 `ANALOG_TOPREADING_MAX`/`ANALOG_BOTTOMREADING_MIN` |
   | 3 | `AUTO_PEAK` | **未实现**，返回错误码 1（`caps` 不报 `AUTO_CAL` 位）|
   | 4 | `BOTTOM_OUT_ON` | 开**触底校准模式**（纯运行态，不落盘）：扫描侧抑制全部键输出
         （等效 `KC_NO`）、状态机不推进，同时把"比当前 `bottom_reading` 更深"的读数
         喂回 `bottom_reading`（只允许推高）|
   | 5 | `BOTTOM_OUT_OFF` | 关触底校准模式，恢复正常输出 |
 
-  错误码：`0` 成功；`1` 未知模式或参数越界；`2` 板级后端不可用（全部键 `raw<0`）
+  错误码：`0` 成功；`1` 未知模式或参数越界；`2` kb 后端不可用（全部键 `raw<0`）
 - `mode=0/1` 成功时 `msg[1..2]` = 本次首个成功采样键的 `raw`（小端），便于 GUI 即时显示
 - `mode=2` 恢复的是**出厂锚点**而非 0/255：锚点在原始 ADC 域，写 0 会让键程模型失效
   直到下次开机重采
@@ -296,13 +296,15 @@ typedef struct __attribute__((packed)) {
   关闭即结束。模式**纯运行态**：不进 EEPROM、开机默认关，上一次忘关也不会把键盘留成
   "砖"。扫描期间 `last_absv` 照常更新，所以 `0xF3` 的行程/读数在模式内仍然有效
 - **校准不变量（锚点安全边界）**：`analog_set_top_reading` / `analog_set_bottom_reading`
-  对入参做 clamp——`top_reading <= DEFAULT_TOP - ANALOG_CAL_GUARD`、
-  `bottom_reading >= DEFAULT_BOTTOM + ANALOG_CAL_GUARD`（`ANALOG_CAL_GUARD` 默认 8，
-  板级可覆盖），越界值视为噪声回落到边界。典型越界来源是"触底校准时有个别键没按"，
-  那批键读到的是静置值，若收下会把 `bottom` 压到 `top` 附近甚至倒挂，直接造成误触发。
-  出厂默认恰好压在边界上（375/675，未校准时的最宽参考），任何一次真实校准都会把它
-  推进边界以内；`top < bottom` 由两条边界同时成立保证。`persist_load` 也过同一个
-  clamp（旧固件可能写过越界锚点）
+  对入参做 **range clamp** 到 kb 声明的读数区间——`ANALOG_TOPREADING_MIN`（未定义则取
+  `1`）`<= top_reading <= ANALOG_TOPREADING_MAX`、`ANALOG_BOTTOMREADING_MIN <=
+  bottom_reading <= ANALOG_BOTTOMREADING_MAX`，越界值视为噪声回落到边界。典型越界
+  来源是"触底校准时有个别键没按"，那批键读到的是静置值，若收下会把 `bottom` 压到
+  `top` 附近甚至倒挂，直接造成误触发。区间两端宏（`TOPREADING_MAX`/`BOTTOMREADING_MIN`）
+  就是出厂锚点，故出厂态恰好压在边界上；因为 `BOTTOMREADING_MIN > TOPREADING_MAX`
+  （`analog_core.h` 有静态断言），clamp 之后 `top < bottom` 恒成立。区间倒挂
+  （`TOPREADING_MAX < TOPREADING_MIN` 等）由 `analog_core.c` 的静态断言在编译期拦下。
+  `persist_load` 也过同一个 clamp（旧固件可能写过越界锚点）
 
 ### 0xF5 `vial_analog_reset_key` —— 复位键配置
 
@@ -312,7 +314,7 @@ typedef struct __attribute__((packed)) {
   `FOLLOW_GLOBAL`；**保留本键校准锚点**（`top_reading` 每次开机重采，`bottom_reading`
   是本键物理量）
 - `ki=0xFFFF`：**出厂重置**——全局槽 + 所有键全部回编译期默认值，**连锚点一起**回
-  `ANALOG_DEFAULT_TOP/BOTTOM_READING`，并**立即落盘**（不等防抖）
+  `ANALOG_TOPREADING_MAX`/`ANALOG_BOTTOMREADING_MIN`，并**立即落盘**（不等防抖）
 
 ### 0xF6 `vial_analog_persist_commit` —— 显式保存
 
@@ -330,16 +332,16 @@ typedef struct __attribute__((packed)) {
 ## 3. EEPROM 持久化布局
 
 区由 `quantum/nvm/eeprom/nvm_eeprom_analog_internal.h` 统一描述，**分配链与寻址共用它**，
-板级 `config.h` 无需参与：
+kb `config.h` 无需参与：
 
 ```c
-#define VIAL_ANALOG_EEPROM_SIZE (ANALOG_PERSIST_SIZE)              /* ANALOG_ENABLE 关时为 0 */
+#define VIAL_ANALOG_EEPROM_SIZE (ANALOG_PERSIST_SIZE)              /* ANALOG_MODEL 未声明时为 0 */
 #define VIAL_ANALOG_EEPROM_ADDR (TOTAL_EEPROM_BYTE_COUNT - VIAL_ANALOG_EEPROM_SIZE)
 ```
 
 - **缩让动作**在 `nvm_dynamic_keymap.c`：动态宏区尾部让出
   `VIAL_ANALOG_EEPROM_SIZE` 字节，并静态断言宏区剩余 ≥100 字节。
-  关掉 `ANALOG_ENABLE` 时为 0，EEPROM 布局与原版完全一致。
+  不声明 `ANALOG_MODEL` 时为 0，EEPROM 布局与原版完全一致。
 - **区首锚在 EEPROM 末尾向前数**，不依赖 VIA/动态键位是否启用。
 
 ### 3.1 布局与偶地址约定
@@ -402,7 +404,7 @@ typedef struct {          // 记录：8 字节（窄）/ 12 字节（宽），�
   显式用户动作（`0xF5` 出厂重置、`0xF6` 保存）走 `persist_flush_all()` 立即落盘。
 - **落盘抑制（`0xF2` 调参）**：`0xF2` 调参全程包在 `analog_set_persist_suppress(true)` 里，脏位
   不置 → 拖动期间零 flash 写入，直到 GUI 点"保存"发 `0xF6`。抑制只包住 0xF2 的
-  处理窗口，校准/复位/板级实时校准（推高 `bottom_reading`）照旧即时标脏；若一次
+  处理窗口，校准/复位/kb 实时校准（推高 `bottom_reading`）照旧即时标脏；若一次
   校准触发的落盘顺带持久化了此前未保存的阈值改动，属预期内行为（不丢数据、不额外磨损）。
 
 ---
@@ -414,7 +416,7 @@ typedef struct {          // 记录：8 字节（窄）/ 12 字节（宽），�
 void     analog_init(void);                       // 填出厂默认 + 加载 EEPROM(失败则写回)；重算模型派生参数
 void     analog_task(void);                       // 周期落盘入口(脏位 + 防抖)
 
-/* 推模型状态机(板级扫描逐键调用) */
+/* 推模型状态机(kb 扫描逐键调用) */
 bool     analog_step_key(uint16_t ki, analog_travel_t sw); // 返回 true = 按下状态翻转
 bool     analog_get_pressed(uint16_t ki);
 
@@ -441,11 +443,11 @@ void     analog_set_tracked_key(uint16_t ki);
 analog_travel_t analog_get_tracked_sw(void);
 int16_t  analog_get_tracked_raw(void);
 
-/* 键程模型层标准钩子(全 weak，板级可强覆盖) */
+/* 键程模型层标准钩子(全 weak，kb 可强覆盖) */
 analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv);
 void     analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom);
 
-/* 板级实现：返回该键最近一次真实 ADC 读数；<0 = 不可用。weak 默认 -1 */
+/* kb 实现：返回该键最近一次真实 ADC 读数；<0 = 不可用。weak 默认 -1 */
 int16_t  analog_backend_get_raw_adc(uint16_t ki);
 ```
 
@@ -462,41 +464,47 @@ int16_t  analog_backend_get_raw_adc(uint16_t ki);
 
 ### 4.1 键程模型选编
 
-`analog_core.c` 只 `#include "analog_model.h"`，由该头按 `config.h` 的 `#define` 选编，与构建系统无关：
+模型选编由**构建系统**完成：kb `rules.mk` 声明 `ANALOG_MODEL = <name>`，`build_vial.mk` 据此把 `analog_model_<name>.c` 编入 SRC（`analog_core.c` 只依赖 `analog_core.h` 里的钩子声明，不再 `#include` 模型头）：
 
-- `#define ANALOG_MODEL_ISF` → 编入 `analog_model_isf.h`（平方反比-快速，磁轴）
-  - `ISF_MAX_TRAVEL = ANALOG_MAX_TRAVEL`；
-    模型 `absv = k / (d - sw)²` ⇒ `sw = D - K·V`，其中
-    `D = M·t/(t-1)`、`t = sqrt(bottom/top)`（预计算）；
-  - 派生标量类型随宽度选：窄 `int16_t` / 宽 `int32_t`（`isf_scalar_t`），
-    并有**编译期"宽度充分"断言** `D_max <= M·2B/(B-A)`
-    （`B = ANALOG_DEFAULT_BOTTOM_READING + ANALOG_CAL_GUARD`、
-    `A = ANALOG_DEFAULT_TOP_READING - ANALOG_CAL_GUARD`，取自校准 clamp 不变量推出的上界）。
-    **断言不成立会直接编译失败**，所以加宽满量程不会静默溢出——触发它说明满量程相对锚点
-    跨度太贪心，调小 `M` 或拉开 `DEFAULT_BOTTOM`/`DEFAULT_TOP` 即可。
-- `#define ANALOG_MODEL_LINEAR_FAST` → 编入 `analog_model_linear_fast.h`
-  （线性，与下默认项同曲线；校准时预算 8.8 定点倒数乘子 K[ki]，扫描里用
+- `ANALOG_MODEL = isf` → 编入 `analog_model_isf.c`（平方反比-快速，磁轴）
+  - 模型 `absv = k / (d - sw)²` ⇒ `sw = D - K·V`，其中
+    `D = M·t/(t-1)`、`t = sqrt(bottom/top)`；
+  - `K = sqrt(top)·D/SCALE` 是**逐键**量，`D`、`K` 都在校准回调
+    `analog_backend_calibration_changed()` 里重算。因为 `K` 随实测锚点变动，
+    `SCALE` 必须留足动态范围，取"让 `K` 恒为 1"的值会让远离出厂锚点的键
+    `K` 塌成 0、整键失效；
+  - `V[i] = SCALE·INV_SQRT[i]` 是编译期常量表，`INV_SQRT[i]` 是格内平均的 `1/sqrt(absv)`。
+    表与 `SCALE` 由 `util/analog_isf_gen.py` 按 kb 锚点漂移区间生成，产物
+    `analog_isf_table.inc` 随构建落到 `$(INTERMEDIATE_OUTPUT)/src/`；
+  - 校准回调只接受合法锚点域（`top ≤ ANALOG_TOPREADING_MAX` 且
+    `bottom ≥ ANALOG_BOTTOMREADING_MIN`，见 `analog_core.h` §6）。该域同时把
+    `d` 界住（域内 `t ≥ sqrt(BOTTOMREADING_MIN/TOPREADING_MAX)`），因此不再需要
+    对 `d` 单独做数值钳位。**非法锚点保留上一次的校准值**，不清零——
+    清零会让该键退化成恒定输出；
+  - 派生标量类型随宽度选：窄 `int16_t` / 宽 `int32_t`（`isf_scalar_t`）。
+- `ANALOG_MODEL = linear_fast` → 编入 `analog_model_linear_fast.c`
+  （线性，与 `linear` 同曲线；校准时预算 8.8 定点倒数乘子 K[ki]，扫描里用
   "乘法+移位"替代 32 位除法，Cortex-M0 上省掉一次软除法。精度 ≤1 LSB。）
   - `K[ki] = round((M << 8) / span)`，`span = bottom - top`，`M = ANALOG_MAX_TRAVEL`；
   - `K` 的类型随宽度选：窄 `uint16_t` / 宽 `uint32_t`（`linfast_k_t`），
     热路径 `((absv-top) * K) >> 8` 用 `uint32_t` 中间量，封顶到 `M`（不是 255）。
-- 不定义 → `analog_model.h` 内联线性兜底：
-  `sw = clamp((absv - top) * M / (bottom - top), 0, M)`（`uint32_t` 中间量，全 weak）
-- 二者同时定义 → 编译期 `#error`（互斥）
+- `ANALOG_MODEL = linear` → 编入 `analog_model_linear.c`：
+  `sw = clamp((absv - top) * M / (bottom - top), 0, M)`（`uint32_t` 中间量）
 
-各分支的钩子**全为 weak**，未被任何模型实现的钩子由 `analog_model.h` 内联线性兜底；
-板级 `.c` 也可强符号覆盖单个钩子（ELF 语义）。
+每个模型 `.c` 各自以 **weak** 定义两个钩子（`analog_model_sw` /
+`analog_backend_calibration_changed`），声明在 `analog_core.h`；kb `.c` 可强符号
+覆盖单个钩子（ELF 语义）。模型互斥由构建保证（`ANALOG_MODEL` 只能取一个值）。
 
 ---
 
-## 5. 板级接入清单
+## 5. kb 接入清单
 
-1. `rules.mk`：`ANALOG_ENABLE = yes`（启用本扩展与核心层）。
-   走 ADC 采样的板子还需 `ANALOG_DRIVER_REQUIRED = yes`——它让 QMK 编入平台
-   ADC 驱动（`adc_read`/`pinToMux`），与 `ANALOG_ENABLE` 是两件事。
-2. `config.h`：按需覆盖 `ANALOG_DEFAULT_*`；定义 `ANALOG_MAX_TRAVEL`（行程域满量程，
-   见 §1.5）；选模型（如 `#define ANALOG_MODEL_ISF`）。
-3. 板级 `matrix.c` 扫描里逐键：`adc_read` → `absv` → `analog_model_sw()` →
+1. `rules.mk`：`ANALOG_MODEL = <name>`（启用本扩展与核心层；name 取 `isf`/`linear_fast`/`linear`）。
+   它同时派生上游 `ANALOG_DRIVER_REQUIRED`，让 QMK 编入平台 ADC 驱动（`adc_read`/`pinToMux`）。
+2. `config.h`：定义 `ANALOG_TOPREADING_MAX`/`ANALOG_BOTTOMREADING_MIN`（出厂静置/触底锚点，
+   必需）；`ANALOG_MAX_TRAVEL`（行程域满量程，见 §1.5）。ISF 还可给漂移区间
+   `ANALOG_TOPREADING_MIN`/`ANALOG_BOTTOMREADING_MAX`（仅生成器入参）。
+3. kb `matrix.c` 扫描里逐键：`adc_read` → `absv` → `analog_model_sw()` →
    `analog_step_key()` → 据返回值翻矩阵位；实时校准调 `analog_set_top/bottom_reading()`。
 4. 实现 `analog_backend_get_raw_adc()`（供 `0xF3` 显示原始值）。
 5. 若用 `0xF4` mode4/5 触底校准开关：扫描里在 `analog_get_bottom_out_mode()` 为真时
@@ -504,7 +512,7 @@ int16_t  analog_backend_get_raw_adc(uint16_t ki);
    `analog_set_bottom_reading()` 只推高本键 `bottom_reading`（详见参考实现）。
 
 参考实现：`keyboards/bvbhu/tl96mgf072/tl96mgf072_matrix.c`。
-> `0xF0`–`0xF6` 全部命令都在 `quantum/vial.c` 的 `#ifdef ANALOG_ENABLE` 段内，
+> `0xF0`–`0xF6` 全部命令都在 `quantum/vial.c` 的 `#ifdef ANALOG_MODEL` 段内，
 > 未启用 analog 的板子不会编入这些代码。
 
 ---
@@ -527,13 +535,13 @@ v1 的以下设计已**移除**，GUI 按 v1 实现的代码需重写：
 
 | v1 | 现状 |
 |----|-----------|
-| 固件按 `analog_backend_read_raw()` 归一化并持有 `sw[96]` | 板级逐键推入 `analog_step_key()`，核心只留被跟踪键一份 `sw` |
+| 固件按 `analog_backend_read_raw()` 归一化并持有 `sw[96]` | kb 逐键推入 `analog_step_key()`，核心只留被跟踪键一份 `sw` |
 | `analog_get_travel()` / `analog_get_raw()` 按 `uint8_t ki` 查询 | `analog_backend_get_raw_adc(uint16_t ki)` + `analog_model_sw()` |
 | `analog_load_config()` / `analog_store_config()` / `analog_calibrate()` | `analog_set_key_config()` / `analog_set_global()` / `analog_set_*_reading()` |
 | `ANALOG_AXIS_TYPE_NONE/HALL/EC/MIXED` 枚举 + `ANALOG_AXIS_TYPE_DEFAULT` | 无轴类型枚举；`axis_type` 由模型宏推导，仅供显示 |
 | 每键 12 字节 + 12 字节全局槽，偏移手写在 `ANALOG_EEPROM_BASE` | 每键 8/12 字节记录 + 6/10 字节全局（随行程域宽度，见 §3），区址由 EEPROM 分配链自动推导 |
 | `raw_rest=0` / `raw_full=255` 归一化恒等映射 | 锚点是原始 ADC 域物理量（磁轴参考值 375/675）|
-| 行程固定 0–255 | 行程域 `0..ANALOG_MAX_TRAVEL`，板级编译期可配，数据类型随满量程选 `uint8`/`uint16`（见 §1.5）|
+| 行程固定 0–255 | 行程域 `0..ANALOG_MAX_TRAVEL`，kb 编译期可配，数据类型随满量程选 `uint8`/`uint16`（见 §1.5）|
 | `0xF4` 四种 mode 全实现 | `AUTO_PEAK`(mode 3) 未实现，返回错误码 1；新增 `BOTTOM_OUT_ON/OFF`(mode 4/5)
   触底校准开关（纯运行态）+ 锚点 clamp 不变量 |
 
@@ -543,4 +551,4 @@ v1 的以下设计已**移除**，GUI 按 v1 实现的代码需重写：
 已移除的旧符号：`analog_backend_read_raw`、`analog_get_travel`、`analog_get_raw`、
 `analog_load_config`、`analog_store_config`、`analog_calibrate`、`analog_get_num_keys`、
 `analog_get_axis_type`、`sw_scaled`、`get/set_noise_floor`、`get/set_bottom_reading`
-（这些是旧板级/核心名，现由 §1.3 映射与 §4 API 取代）。
+（这些是旧 kb/核心名，现由 §1.3 映射与 §4 API 取代）。

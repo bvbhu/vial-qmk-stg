@@ -1,21 +1,21 @@
-/* Copyright 2026 vial-qmk-wireless contributors
+/* Copyright 2026 bvbhu
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
 /* =========================================================================
  *  快速线性键程映射：把除法换成"乘法 + 移位"。
  *
- *  板级 config.h 里 #define ANALOG_MODEL_LINEAR_FAST 即启用本模型；
+ *  kb rules.mk 声明 ANALOG_MODEL = linear_fast 即编入本文件；
  *
- *  数学等价(与 analog_model.h 内联线性兜底同一条线性曲线)：
+ *  数学等价(与 analog_model_linear.c 纯除法线性同一条曲线)：
  *    原线性：  sw = (absv - top) * M / (bottom - top)            // 一次 32 位除法
  *    本模型：  sw = ((absv - top) * K[ki]) >> 8                  // 一次乘法 + 移位
  *      其中 K[ki] = round(M * 256 / (bottom - top))             // 校准时预计算
- *      M = ANALOG_MAX_TRAVEL(行程域满量程，板级可配)
+ *      M = ANALOG_MAX_TRAVEL(行程域满量程，kb 可配)
  *
  * ========================================================================= */
-#pragma once
 
+#include "matrix.h" /* MATRIX_ROWS/COLS：必须在 analog_core.h 之前可见(见其 §1 的 #error) */
 #include "analog_core.h"
 
 /* 8 位输出 + 8 位小数定点：K = round((M<<8) / span)，热路径右移本位数。
@@ -32,11 +32,11 @@ typedef uint16_t linfast_k_t;
 #endif
 
 /* 编译期出厂默认 K：从出厂锚点推导(与 ISF_DEFAULT_D/K 同源)。
- *   span = DEFAULT_BOTTOM - DEFAULT_TOP (>0 由下方静态断言保证)
+ *   span = BOTTOMREADING_MIN - TOPREADING_MAX (>0 由下方静态断言保证)
  *   K    = round(M*256 / span) = ((M<<8) + span/2) / span            */
-_Static_assert(ANALOG_DEFAULT_BOTTOM_READING > ANALOG_DEFAULT_TOP_READING,
-               "ANALOG_MODEL_LINEAR_FAST 需要出厂默认 bottom > top，否则默认 K 除零");
-#define LINFAST_DEFAULT_SPAN ((uint32_t)((uint32_t)ANALOG_DEFAULT_BOTTOM_READING - (uint32_t)ANALOG_DEFAULT_TOP_READING))
+_Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX,
+               "linear_fast 模型需要出厂默认 bottom > top，否则默认 K 除零");
+#define LINFAST_DEFAULT_SPAN ((uint32_t)((uint32_t)ANALOG_BOTTOMREADING_MIN - (uint32_t)ANALOG_TOPREADING_MAX))
 #define LINFAST_DEFAULT_K     ((linfast_k_t)((((uint32_t)ANALOG_MAX_TRAVEL << LINFAST_FRAC_BITS) + (LINFAST_DEFAULT_SPAN / 2u)) / LINFAST_DEFAULT_SPAN))
 
 /* 每键预计算的 8.8 定点倒数乘子；出厂即 LINFAST_DEFAULT_K，校准时由

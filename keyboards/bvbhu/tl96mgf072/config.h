@@ -4,23 +4,20 @@
 /* 实时校准：读数持续偏离锚点超过它才更新(防噪声抖锚点) */
 #define CALIBRATION_THRESHOLD 50
 
-/* 键程模型：平方反比-快速(磁轴)；不定义则默认线性映射 */
-#define ANALOG_MODEL_ISF
 
-/* ---- 出厂默认(覆盖 quantum/analog/analog_core.h 的通用值) ----
- * 阈值取参考实现；锚点是 Hall 轴的典型静置/触底读数 */
+/* ---- kb 出厂默认 ----
+ * 阈值/RT 是行程域内的无量纲约定值，可沿用核心层兜底。
+ * 锚点是 Hall 轴的静置/触底原始 ADC 读数——**本板相关物理量，必须在本文件定义**，
+ * 核心层不做兜底(缺定义直接编译报错)。取参考实现的典型值。 */
 #define ANALOG_DEFAULT_ACTUATION_THRESHOLD 200
 #define ANALOG_DEFAULT_RELEASE_THRESHOLD   192
-#define ANALOG_DEFAULT_TOP_READING         375
-#define ANALOG_DEFAULT_BOTTOM_READING      675
+#define ANALOG_TOPREADING_MIN    200
+#define ANALOG_TOPREADING_MAX    350
+#define ANALOG_BOTTOMREADING_MIN 700
+#define ANALOG_BOTTOMREADING_MAX 850
 
-/* 行程域满量程(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 Hall 锚点跨度 ~300 ADC 计数，保持 255。
- * 加宽到 >255 则行程域升 uint16(配置/记录/读数尺寸随之变)，出厂阈值须同步否则断言报错。 */
+/* Vial 显示的行程域满量程 */
 #define ANALOG_MAX_TRAVEL 255
-
-/* 持久化：analog 区直接编入 quantum/nvm/eeprom 的 EEPROM 分配链
- * (nvm_dynamic_keymap.c 把动态宏区尾部让出，大小按 ANALOG_PERSIST_SIZE
- * 自动推导)，板级无需配置。 */
 
 /* WS2812 时序参数 */
 #define WS2812_T0H 200

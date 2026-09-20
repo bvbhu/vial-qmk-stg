@@ -24,7 +24,7 @@
 
 #include "vial_ensure_keycode.h"
 
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
 #    include "analog/analog_core.h"
 #endif
 
@@ -87,7 +87,7 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
     return in;
 }
 
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
 /* ==== Vial Analog 协议扩展(0xF0-0xF6)：线格式翻译层 ====
  * 命令语义见 docs/vial-analog-protocol.md。行程域 0..ANALOG_MAX_TRAVEL，轴体无关。
  * 线上 config ↔ 推模型核心(analog_core.h) 的字段映射：
@@ -106,7 +106,7 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
  * 取值也不同：本宏管空口命令线格式，那个管落盘记录能否复用，改其一不必动另一个。 */
 #define VIAL_ANALOG_PROTOCOL_VERSION 1
 
-/* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，板级可覆盖 */
+/* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，kb 可覆盖 */
 #ifndef ANALOG_PROTOCOL_AXIS_TYPE
 #    if defined(ANALOG_MODEL_EC)
 #        define ANALOG_PROTOCOL_AXIS_TYPE 2 /* 静电容 */
@@ -184,8 +184,8 @@ static void vial_analog_get_wire_config(uint16_t ki, vial_analog_wire_config_t *
         c->rt_down         = g_analog_global.actuation_offset;
         c->rt_up           = g_analog_global.release_offset;
         if (g_analog_global.rt_enabled) c->flags = VIAL_ANALOG_FLAG_RT_ENABLED;
-        c->raw_rest = ANALOG_DEFAULT_TOP_READING;    /* 全局槽不持锚点：回出厂参考值 */
-        c->raw_full = ANALOG_DEFAULT_BOTTOM_READING;
+        c->raw_rest = ANALOG_TOPREADING_MAX;    /* 全局槽不持锚点：回出厂参考值 */
+        c->raw_full = ANALOG_BOTTOMREADING_MIN;
         return;
     }
     const analog_key_t *k = &g_analog_key[ki];
@@ -239,14 +239,14 @@ static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_w
 
 /* 0xF2 对外入口：包一层 suppress，使本次 set 全程只改 RAM、不标脏落盘。
  * 调参(拖滑块)反复发 0xF2 也不会磨损 EEPROM；用户点 GUI "保存"才发 0xF6 落盘。
- * 校准(0xF4)/复位(0xF5)/板级扫描不经过本层，仍各自即时标脏落盘。 */
+ * 校准(0xF4)/复位(0xF5)/kb 扫描不经过本层，仍各自即时标脏落盘。 */
 static uint8_t vial_analog_set_wire_config(uint16_t ki, const vial_analog_wire_config_t *c) {
     analog_set_persist_suppress(true);
     uint8_t r = vial_analog_set_wire_config_impl(ki, c);
     analog_set_persist_suppress(false);
     return r;
 }
-#endif /* ANALOG_ENABLE */
+#endif /* ANALOG_MODEL */
 
 void vial_handle_cmd(uint8_t *msg, uint8_t length) {
     /* All packets must be fixed 32 bytes */
@@ -492,7 +492,7 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
 
             break;
         }
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
         /* ---- Vial Analog 协议扩展(0xF0-0xF5)，翻译层见文件头部说明 ---- */
         case vial_analog_get_caps: {
             memset(msg, 0, length);
@@ -529,6 +529,8 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
         }
         case vial_analog_get_key_readings: {
             uint16_t start = msg[2] | ((uint16_t)msg[3] << 8);
+            /* 清包必须在读完入参 start(msg[2..3]) 之后：n 较小时 msg[1..] 会残留上一包字节。 */
+            memset(msg, 0, length);
             uint8_t  n     = 0;
             if (start < ANALOG_NUM_KEYS) {
                 n = (uint8_t)(ANALOG_NUM_KEYS - start);
@@ -595,15 +597,15 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
                         msg[1] = (uint8_t)(first & 0xFF);
                         msg[2] = (uint8_t)((uint16_t)first >> 8);
                     } else {
-                        msg[0] = 2; /* 板级后端不可用 */
+                        msg[0] = 2; /* kb 后端不可用 */
                     }
                     break;
                 }
                 case VIAL_ANALOG_CAL_RESET:
                     /* 恢复出厂锚点(非 0/255：锚点是原始 ADC 域物理量，0 会让模型失效到重开机) */
                     for (uint16_t i = lo; i <= hi; i++) {
-                        analog_set_top_reading(i, ANALOG_DEFAULT_TOP_READING);
-                        analog_set_bottom_reading(i, ANALOG_DEFAULT_BOTTOM_READING);
+                        analog_set_top_reading(i, ANALOG_TOPREADING_MAX);
+                        analog_set_bottom_reading(i, ANALOG_BOTTOMREADING_MIN);
                     }
                     msg[0] = 0;
                     break;

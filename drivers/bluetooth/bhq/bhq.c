@@ -104,14 +104,6 @@ void BHQ_SendData(uint8_t *dat, uint16_t length)
 
 
     uart_transmit(dat, length);
-    // int s = 0;//sdWrite(&UART_DRIVER,dat, length);
-    // Debug print: show sent data
-    // bhq_printf("mcu send data :");
-    // for (uint16_t i = 0; i < length; i++)
-    // {
-    //     bhq_printf("%02x ", dat[i]);
-    // }
-    // bhq_printf("\r\n");
 }
 
 bool bhq_available(void) {
@@ -426,14 +418,16 @@ void bhq_send_mouse(uint8_t* report) {
 #endif 
 
 #ifdef WHEEL_EXTENDED_REPORT
-    // BHQ model not supported 16bit of vh
-    // neet bit16 to bit8  
+    /* BHQ 模块不支持 16bit v/h：16bit 收成 8bit（先高字节后低字节）后入帧，
+     * 必须与 #ifndef 分支一样占 2 字节，否则帧长对不上。 */
     int16_t v = 0;
-    v = hid_report[report_i++] << 8;  
-    v |= hid_report[report_i++];      
+    v = (int16_t)(report[report_i++] << 8);
+    v |= report[report_i++];
     int16_t h = 0;
-    h = hid_report[report_i++] << 8;
-    h |= hid_report[report_i++];    
+    h = (int16_t)(report[report_i++] << 8);
+    h |= report[report_i++];
+    bhkBuff[index++] = (uint8_t)v;
+    bhkBuff[index++] = (uint8_t)h;
 #endif
 #ifndef WHEEL_EXTENDED_REPORT
     bhkBuff[index++] = report[report_i++];   // v bit8
@@ -468,10 +462,12 @@ void BHQ_Protocol_Process(uint8_t *dat, uint16_t length)
     uint8_t cmdid = 0;
     uint8_t cmd_length = 0;
     uint8_t buff_sta = 0;
+    /* dat[3] 起为命令码与参数：帧长不足 5（帧头2+LEN1+cmd1+参数1）不得索引。 */
+    if (dat == NULL || length < 5) {
+        return;
+    }
     cmdid = dat[3];
     cmd_length = dat[2];
-    // uint8_t i = 0 ;
-    // bhq_printf("BHQ_Protocol_Process: cmdid:%d\r\n",cmdid);
     switch(cmdid)
     {
         case 0x26:  // BHQ model return hid led lock sta
@@ -485,7 +481,7 @@ void BHQ_Protocol_Process(uint8_t *dat, uint16_t length)
         case 0xA5:
         case 0xA7:
             buff_sta = dat[4];
-            if(cmd_length == 3) // key code command response frame carries an led lock (!! new 207+)
+            if(cmd_length == 3 && length >= 6) // key code command response frame carries an led lock (!! new 207+)
             {
                 BHQ_Led_Lock(dat[5]);
             }
@@ -503,7 +499,6 @@ void BHQ_Protocol_Process(uint8_t *dat, uint16_t length)
                     report_buffer_set_inverval(DEFAULT_REPORT_INVERVAL_MS + 50);
                 break;
             }
-            // bhq_printf("key ack sta:%d\n",buff_sta);
             break;
     }
     BHQ_Protocol_Process_user(dat,length);
@@ -572,7 +567,19 @@ void bhq_task(void)
             buf[index++] = bytedata;
             if(dataLength == 0)
             {
-                dataLength = 2 + 1 + bytedata + 2 + 1;
+                /* 帧长 = 帧头2 + LEN1 + DATA + CRC2 + 帧尾1 = bytedata + 6。
+                 * LEN 来自线上数据，超出缓冲上限的帧整帧丢弃。
+                 * 上限取 PACKET_MAX_LEN-1：index 是 uint8_t，帧长等于 PACKET_MAX_LEN
+                 * 时 index 永远追不上 dataLength。 */
+                uint16_t frame_len = (uint16_t)bytedata + 6u;
+                if(frame_len > (uint16_t)(PACKET_MAX_LEN - 1u))
+                {
+                    index      = 0;
+                    u_sta      = 0;
+                    dataLength = 0;
+                    break;
+                }
+                dataLength = (uint8_t)frame_len;
             }
             while(index < dataLength)
             {

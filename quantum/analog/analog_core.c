@@ -1,4 +1,4 @@
-/* Copyright 2026 vial-qmk-wireless contributors
+/* Copyright 2026 bvbhu
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,18 +21,8 @@
 
 #include <string.h>
 
-#include "eeprom.h" /* TOTAL_EEPROM_BYTE_COUNT / eeprom_update_* (§9 持久化) */
-#include "timer.h"  /* timer_read32：落盘防抖计时 */
-
-#include "analog_model.h" /* 键程映射模型 */
-
-/* =========================================================================
- *  持久化(§9)：区址由 QMK 的 EEPROM 分配链决定，板级 config.h 不参与
- *
- *  nvm_dynamic_keymap.c 把动态宏区尾部让出 VIAL_ANALOG_EEPROM_SIZE
- *  (= ANALOG_PERSIST_SIZE 取偶，随矩阵尺寸自动推导) 字节；分配链的缩让
- *  与本文件的寻址共用 nvm_eeprom_analog_internal.h，没有可漂移的手写常量。
- * ========================================================================= */
+#include "eeprom.h"
+#include "timer.h"
 #include "../nvm/eeprom/nvm_eeprom_analog_internal.h"
 
 #define ANALOG_EEPROM_BASE VIAL_ANALOG_EEPROM_ADDR
@@ -49,41 +39,25 @@ _Static_assert(ANALOG_NUM_KEYS <= 255, "持久化头部 num_keys 是单字节");
 #    define ANALOG_PERSIST_FLUSH_MS 500u
 #endif
 
-/* 校准锚点安全边界(校准不变量) ----
- * 出厂锚点是"可信最坏范围"的边界：静置读数只允许比 ANALOG_DEFAULT_TOP_READING
- * 更小(更松弛)，触底读数只允许比 ANALOG_DEFAULT_BOTTOM_READING 更大(更深)，
- * 边界外再留 ANALOG_CAL_GUARD 计数的噪声带。越界值一律视为噪声、回落到边界。
- * ANALOG_CAL_GUARD 定义在 analog_core.h(模型层要用它推派生参数量级)。
- *
- * 最典型的越界来源是"触底校准时有个别键没按"——那批键读到的是静置值，若收下会把
- * bottom 压到 top 附近甚至倒挂，直接造成误触发。clamp 之后恒有
- *   ANALOG_CAL_GUARD <= top_reading <= DEFAULT_TOP  - GUARD
- *   bottom_reading >= DEFAULT_BOTTOM + GUARD
- *
- * 注意**出厂默认锚点(375/675)不在 clamp 域内**：域是 [GUARD, DEFAULT_TOP-GUARD] 与
- * [DEFAULT_BOTTOM+GUARD, ∞)，默认值由 fill_defaults() 直写、不经 clamp。所以
- * "top < bottom" 由 DEFAULT_BOTTOM > DEFAULT_TOP 保证，而不是由 clamp 保证；
- * 用 clamp 的界去推导依赖锚点跨度的量(如 ISF 的 D)时必须改用 DEFAULT_* 原始值。 */
+/* 校准锚点安全边界(校准不变量) ---- */
+#ifdef ANALOG_TOPREADING_MIN
+#    define ANALOG_TOPREADING_CLAMP_LO ((uint16_t)ANALOG_TOPREADING_MIN)
+_Static_assert(ANALOG_TOPREADING_MIN >= 1, "ANALOG_TOPREADING_MIN 必须 >= 1：top==0 会让模型层跳过派生参数重算，与 mapping 失配");
+#else
+#    define ANALOG_TOPREADING_CLAMP_LO ((uint16_t)1)
+#endif
 
-/* 噪声带必须比边界窄：否则 clamp_top_reading 的下界会高于上界，两条边界打架。
- * 这是 ANALOG_CAL_GUARD 唯一的结构性约束，编译期抓比运行期出怪值好。 */
-_Static_assert((uint32_t)ANALOG_DEFAULT_TOP_READING >= 2u * (uint32_t)ANALOG_CAL_GUARD, "ANALOG_CAL_GUARD 过大：DEFAULT_TOP - GUARD < GUARD，顶部噪声带上下界会倒挂");
+_Static_assert((uint32_t)ANALOG_TOPREADING_MAX >= (uint32_t)ANALOG_TOPREADING_CLAMP_LO, "读数区间倒挂：TOPREADING_MAX < TOPREADING_MIN");
+_Static_assert((uint32_t)ANALOG_BOTTOMREADING_MAX >= (uint32_t)ANALOG_BOTTOMREADING_MIN, "读数区间倒挂：BOTTOMREADING_MAX < BOTTOMREADING_MIN");
 
 static uint16_t clamp_top_reading(uint16_t value) {
-    /* 下界：0 或极小值不是"可信的静置读数"，而是空键/未接轴体。收下会让模型层
-     * 拿到 top=0 —— analog_backend_calibration_changed 会因 top==0 提前返回，
-     * 派生参数 D/K 停在上一次的值，而 mapping 却按新 top 判定，两者失配。
-     * 与上界同理：越界值一律视为噪声、回落到边界。 */
-    if (value < (uint16_t)ANALOG_CAL_GUARD) value = (uint16_t)ANALOG_CAL_GUARD;
-    uint16_t limit = (ANALOG_DEFAULT_TOP_READING > (uint16_t)ANALOG_CAL_GUARD)
-                         ? (uint16_t)(ANALOG_DEFAULT_TOP_READING - (uint16_t)ANALOG_CAL_GUARD)
-                         : 0;
-    return (value <= limit) ? value : limit;
+    if (value < ANALOG_TOPREADING_CLAMP_LO) return ANALOG_TOPREADING_CLAMP_LO;
+    return (value <= (uint16_t)ANALOG_TOPREADING_MAX) ? value : (uint16_t)ANALOG_TOPREADING_MAX;
 }
 
 static uint16_t clamp_bottom_reading(uint16_t value) {
-    uint16_t limit = (uint16_t)((uint32_t)ANALOG_DEFAULT_BOTTOM_READING + (uint32_t)ANALOG_CAL_GUARD);
-    return (value >= limit) ? value : limit;
+    if (value < (uint16_t)ANALOG_BOTTOMREADING_MIN) return (uint16_t)ANALOG_BOTTOMREADING_MIN;
+    return (value <= (uint16_t)ANALOG_BOTTOMREADING_MAX) ? value : (uint16_t)ANALOG_BOTTOMREADING_MAX;
 }
 
 /* 行程域饱和：把任意宽度的入参收进 0..ANALOG_MAX_TRAVEL。
@@ -102,7 +76,7 @@ static uint32_t g_persist_last_flush   = 0;
 
 /* 0xF2 调参期间设 true：persist_mark_* 变 no-op，故 0xF2 只改 RAM、不落盘 EEPROM。
  * 由 vial_analog_set_wire_config 在处理 0xF2 命令时 set→处理→reset(同步无重入)，
- * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / 板级扫描不经过该层，标脏照常。
+ * 仅作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 / kb 扫描不经过该层，标脏照常。
  *
  * ⚠️ 抑制期被吞掉的标脏记在 g_persist_shadow 里，解除抑制时一次性补标。
  * 这不是优化而是**正确性要求**：头校验和 persist_checksum_ram() 是按 RAM 全量算的，
@@ -253,7 +227,7 @@ static bool persist_load(void) {
 }
 
 /* 心跳超时(见下方 analog_task)。默认 60s：触底校准要逐个按满全部键，给足人手速；
- * 板级可用 config.h 覆盖。 */
+ * kb 可用 config.h 覆盖。 */
 #ifndef ANALOG_BOTTOM_OUT_TIMEOUT_MS
 #    define ANALOG_BOTTOM_OUT_TIMEOUT_MS 60000u
 #endif
@@ -292,7 +266,7 @@ uint16_t        g_analog_tracked_key = ANALOG_TRACK_NONE;
 static analog_travel_t g_tracked_sw = 0;
 static bool    g_initialized = false;
 
-/* 板级后端钩子的 weak 默认(模型层钩子在上面的模型头文件里)：
+/* kb 后端钩子的 weak 默认(模型层钩子在上面的模型头文件里)：
  * 无通用标准 raw-adc 后端，报不了原始读数。 */
 __attribute__((weak)) int16_t analog_backend_get_raw_adc(uint16_t ki) {
     (void)ki;
@@ -320,8 +294,8 @@ static void fill_defaults(void) {
         k->release_threshold   = ANALOG_DEFAULT_RELEASE_THRESHOLD;
         k->actuation_offset    = ANALOG_DEFAULT_ACTUATION_OFFSET;
         k->release_offset      = ANALOG_DEFAULT_RELEASE_OFFSET;
-        k->bottom_reading      = ANALOG_DEFAULT_BOTTOM_READING;
-        k->top_reading         = ANALOG_DEFAULT_TOP_READING;
+        k->bottom_reading      = ANALOG_BOTTOMREADING_MIN;
+        k->top_reading         = ANALOG_TOPREADING_MAX;
         k->extremum            = k->actuation_threshold;
         k->flags               = ANALOG_DEFAULT_FLAGS;
     }
@@ -494,10 +468,8 @@ void analog_set_global(const analog_global_t *g) {
         k->actuation_offset    = g_analog_global.actuation_offset;
         k->release_offset      = g_analog_global.release_offset;
         k->flags               = (uint8_t)((k->flags & ~(uint8_t)ANALOG_FLAG_RT_ENABLED) | rt_bit);
-        /* 跟随键的 RAM 被这里改过，必须逐个标脏。不能只标全局：头校验和是按 RAM 全量
-         * 计算的，而 persist_flush_dirty() 只写脏项 —— 漏标会让数据段与校验和失配，
-         * 下次开机整区作废。（曾误以为"加载时按全局推导"可以省掉这些记录，但那只
-         * 影响读取路径，救不了校验和。） */
+        /* 跟随键的 RAM 被这里改过，必须逐个标脏：漏标会让数据段与头校验和失配
+         * (不变量见 g_persist_suppress 定义处)。加载时按全局推导只影响读取路径，救不了校验和。 */
         persist_mark_key(i);
     }
     persist_mark_global();
@@ -538,12 +510,8 @@ void analog_mark_dirty(uint16_t ki) {
     persist_mark_key(ki);
 }
 
-/* 语义见 g_persist_suppress 定义处的注释（0xF2 调参期间设 true 使标脏变 no-op）。
- *
- * 解除抑制(false)时把抑制期攒下的影子脏位并回真脏位图：这些键的 RAM 已被改过，
- * 必须让它们参与后续落盘，否则头校验和(按 RAM 算)会与数据段(只写脏项)失配，
- * 导致下次开机整区作废。并回不会立刻写 flash —— 仍由 analog_task 的 500ms 防抖
- * 或用户显式 0xF6 决定落盘时机，故 0xF2 拖动期间依然是零写入。 */
+/* 解除抑制(false)时把抑制期攒下的影子脏位并回真脏位图(理由见 g_persist_suppress 定义处)。
+ * 并回不立刻写 flash —— 落盘时机仍由 analog_task 的防抖或 0xF6 决定，故 0xF2 拖动期间零写入。 */
 void analog_set_persist_suppress(bool suppress) {
     if (g_persist_suppress && !suppress) {
         for (uint16_t i = 0; i < sizeof(g_persist_shadow); i++) {

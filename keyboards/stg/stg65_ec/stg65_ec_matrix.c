@@ -248,7 +248,7 @@ void bootmagic_scan(void) {
     for (volatile uint8_t d = 0; d < MATRIX_COLS; d++) {}
     uint16_t v = ec_readkey_raw(0, 0, 0);
     OPAMP_DISABLE();
-    if (v > ANALOG_DEFAULT_TOP_READING) {
+    if (v > ANALOG_BOTTOMREADING_MIN) {
         bootmagic_reset_eeprom();
         bootloader_jump();
     }

@@ -24,11 +24,22 @@ ifeq ($(strip $(VIALRGB_ENABLE)), yes)
 endif
 
 # Analog (静电容/磁轴) — 行程 0-255，协议命令详见 docs/vial-analog-protocol.md
-ANALOG_ENABLE ?= no
-ifeq ($(strip $(ANALOG_ENABLE)), yes)
+#
+# kb 只需在 rules.mk 声明 ANALOG_MODEL = <name>，即启用整个模拟子系统：
+#   isf         平方反比-快速(磁轴)，构建期另生成查表常量(见 build_keyboard.mk)
+#   linear_fast 线性(乘+移替代除法)
+#   linear      线性(纯除法，EC 兜底)
+# 编入 analog_core.c + 对应 analog_model_<name>.c；-DANALOG_MODEL(无值宏)供
+# vial.c/keyboard.c/nvm 的 #ifdef 门控(协议命令/EEPROM 区)。
+#
+# ANALOG_DRIVER_REQUIRED 是上游 QMK 变量(common_features.mk:1010 据此编入平台
+# ADC 驱动 analog.c + HAL_USE_ADC)，此处由 ANALOG_MODEL 派生，板级无需另写。
+ifneq ($(strip $(ANALOG_MODEL)),)
+    ANALOG_DRIVER_REQUIRED = yes
     SRC += $(QUANTUM_DIR)/analog/analog_core.c
+    SRC += $(QUANTUM_DIR)/analog/analog_model_$(ANALOG_MODEL).c
     COMMON_VPATH += $(QUANTUM_DIR)/analog
-    OPT_DEFS += -DANALOG_ENABLE
+    OPT_DEFS += -DANALOG_MODEL
 endif
 
 ifeq ($(strip $(QMK_SETTINGS)), yes)

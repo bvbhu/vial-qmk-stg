@@ -75,9 +75,9 @@
 
 // *********************************************** Vial analog 出厂默认值 ***********************************************
 // 行程域：sw = (absv - top) * M / (bottom - top)，M = ANALOG_MAX_TRAVEL(见下)。absv 为原始 ADC 读数。
-// 核心钳位 top ≤ DEFAULT_TOP-8、bottom ≥ DEFAULT_BOTTOM+8；开机实测静置读数重写 top。
-#define ANALOG_DEFAULT_TOP_READING 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
-#define ANALOG_DEFAULT_BOTTOM_READING 900      /* 触底锚点初值(可被校准推至1023) */
+// 核心钳位 top ≤ TOPREADING_MAX-8、bottom ≥ BOTTOMREADING_MIN+8；开机实测静置读数重写 top。
+#define ANALOG_TOPREADING_MAX 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
+#define ANALOG_BOTTOMREADING_MIN 900      /* 触底锚点初值(可被校准推至1023) */
 #define ANALOG_DEFAULT_ACTUATION_THRESHOLD 3000  /* 触发行程(0..ANALOG_MAX_TRAVEL) */
 #define ANALOG_DEFAULT_RELEASE_THRESHOLD 1000    /* 释放行程(0..ANALOG_MAX_TRAVEL，与触发点相距 2000 = 半量程) */
 #define CALIBRATION_THRESHOLD 32               /* 实时校准：偏离锚点超过该ADC计数才更新 */
@@ -98,12 +98,11 @@
 
 #   define UART_DRIVER          SD2
 #   define UART_TX_PIN          A2
-/* STM32F411 是 GPIOv2，AF7 = USART2 的 TX/RX，故 PA2/PA3 的复用功能号是 7。
- * 不写裸值：板子换到 F1(GPIOv1，复用功能无编号)后裸值即非法。
- * PAL_MODE_ALTERNATE(7) 在 GPIOv2 上与旧裸值等价，但语义更明确。 */
-#   define UART_TX_PAL_MODE     PAL_MODE_ALTERNATE(7)
+/* 裸 AF 编号（PA2/PA3 的 USART2 为 7）：uart_serial.c 的 GPIOv2 分支会再包一层 PAL_MODE_ALTERNATE()。
+ * GPIOv1 板子不做包装、直接透传，那里须写完整 PAL mode（如 PAL_MODE_STM32_ALTERNATE_PUSHPULL）。 */
+#   define UART_TX_PAL_MODE     7
 #   define UART_RX_PIN          A3
-#   define UART_RX_PAL_MODE     PAL_MODE_ALTERNATE(7)
+#   define UART_RX_PAL_MODE     7
 
 // STM32使用到的高速晶振引脚号，做低功耗需要用户配置，每款芯片有可能不一样的
 #define LPM_STM32_HSE_PIN_IN     H1

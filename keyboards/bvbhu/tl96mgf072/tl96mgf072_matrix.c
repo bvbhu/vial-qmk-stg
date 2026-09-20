@@ -42,7 +42,7 @@ void calibrate_matrix(void)
                 uint16_t absv = adc_value_fornoise <= 2047 ? 2047 - adc_value_fornoise : adc_value_fornoise - 2048;
                 // 异常样本(采样期间该键被按下)直接丢弃，不计入均值：旧写法把它替换成
                 // 一个无关常量再照常累加，等于人为拉高该键的噪声基底。
-                if (absv > ANALOG_DEFAULT_BOTTOM_READING) { noise_floor_valid[row][col]--; continue; }
+                if (absv > ANALOG_BOTTOMREADING_MIN) { noise_floor_valid[row][col]--; continue; }
                 noise_floor_accum[row][col] += absv;
             }
             gpio_write_pin_low(col_pins[col]); // 关闭当前列

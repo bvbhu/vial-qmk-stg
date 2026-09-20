@@ -108,12 +108,12 @@ STATIC_ASSERT((int64_t)(DYNAMIC_KEYMAP_EEPROM_MAX_ADDR) - (int64_t)(DYNAMIC_KEYM
 #endif
 // Dynamic macros are stored after the keymaps and use what is available
 // up to and including DYNAMIC_KEYMAP_EEPROM_MAX_ADDR, minus the analog
-// persistence region borrowed off the tail (0 when ANALOG_ENABLE is off).
+// persistence region borrowed off the tail (0 when ANALOG_MODEL is off).
 #ifndef DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE
 #    define DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE (DYNAMIC_KEYMAP_EEPROM_MAX_ADDR - DYNAMIC_KEYMAP_MACRO_EEPROM_ADDR + 1 - VIAL_ANALOG_EEPROM_SIZE)
 #endif
 
-#if defined(ANALOG_ENABLE)
+#if defined(ANALOG_MODEL)
 STATIC_ASSERT((int64_t)(DYNAMIC_KEYMAP_MACRO_EEPROM_SIZE) >= 100, "analog 持久化区借出后动态宏区不足 100 字节");
 #endif
 

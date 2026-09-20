@@ -516,6 +516,46 @@ ifeq ($(KEYMAP_C),)
     $(call CATASTROPHIC_ERROR,Invalid keymap,Could not find keymap)
 endif
 
+# 键程模型选择编译：kb rules.mk 声明 ANALOG_MODEL，build_vial.mk 编入对应 model 文件。
+# ISF 的查表常量需构建期生成，见下方 ANALOG_ISF_TABLE 门控。
+
+# ISF 查表常量(analog_isf_table.inc)。
+ANALOG_ISF_TABLE := $(INTERMEDIATE_OUTPUT)/src/analog_isf_table.inc
+ANALOG_ISF_EXTRACT := util/analog_isf_extract.py
+ANALOG_ISF_GEN := util/analog_isf_gen.py
+# 死区上界：生成器挑 SCALE 的硬约束，非板相关，做成 make 变量供 rules.mk 覆盖。
+# 20 为生成器默认值，>=20 后形状误差不再下降。
+ANALOG_ISF_DEADZONE_MAX ?= 20
+# 兜底头文件：提供 ANALOG_ISF_* 等 #ifndef 默认(见 analog_core.h §6.5)。
+ANALOG_ISF_DEFAULTS_H := $(QUANTUM_DIR)/analog/analog_core.h
+ANALOG_ISF_WORKDIR := $(INTERMEDIATE_OUTPUT)/analog_isf
+
+# 单独编译器变量：$(CC) 形如 "ccache arm-none-eabi-gcc" 是两个 token，直接传 --cc 会被
+# shell 拆开只拿到 "ccache"，故取 lastword(ccache 对一次性探针无意义)。
+# 用 `?=` + 递归 `=`：$(CC) 由 platforms/*/platform.mk 更靠后定义，:= 会冻成空串。
+ANALOG_ISF_CC ?= $(lastword $(CC))
+
+# --config-h 从浅到深传(后面覆盖前面)，与 -include 顺序一致。
+ANALOG_ISF_EXTRACT_ARGS = --cc "$(ANALOG_ISF_CC)" --workdir $(ANALOG_ISF_WORKDIR) \
+	$(foreach h,$(CONFIG_H) $(POST_CONFIG_H),--config-h $(h)) \
+	$(foreach h,$(ANALOG_ISF_DEFAULTS_H),--defaults-h $(h))
+
+# 依赖：两脚本 + config.h 链 + 兜底头 + 可能覆盖 DEADZONE 的 rules.mk。
+# 用 `=` 延后展开 $(CONFIG_H)。
+ANALOG_ISF_DEPS = $(ANALOG_ISF_GEN) $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_DEFAULTS_H) $(CONFIG_H) $(POST_CONFIG_H) \
+	$(wildcard $(KEYBOARD_PATH_1)/rules.mk) $(wildcard $(KEYBOARD_PATH_1)/post_rules.mk) \
+	$(wildcard $(KEYMAP_PATH)/rules.mk)
+
+$(ANALOG_ISF_TABLE): $(ANALOG_ISF_DEPS)
+	@$(SILENT) || printf "$(MSG_GENERATING) $@" | $(AWK_CMD)
+	$(eval CMD=python3 $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_EXTRACT_ARGS) --emit-gen-cmd --gen $(ANALOG_ISF_GEN) --deadzone-max $(ANALOG_ISF_DEADZONE_MAX) --output $@)
+	@$(BUILD_CMD)
+
+# ISF模型才编译 
+ifeq ($(strip $(ANALOG_MODEL)),isf)
+generated-files: $(ANALOG_ISF_TABLE)
+endif
+
 OPT_DEFS += -DKEYMAP_C=\"$(KEYMAP_C)\"
 
 # If a keymap or userspace places their keymap array in another file instead, allow for it to be included

@@ -112,17 +112,8 @@ typedef struct
 #define BHQ_SUCCESS     0
 // -------------------- bhq protocol Small terminal mode --------------------
 
-// Module operating status and qmk have the level status of data transmission       
+// Module operating status and qmk have the level status of data transmission
 #define BHQ_RUN_OR_INT_LEVEL       1
-
-// #ifndef BHQ_IQR_PIN
-// #    warning "BHQ_IQR_PIN is not defined (not required for BHQ firmware >= 226)"
-// #endif
-
-// #ifndef BHQ_INT_PIN
-// #    warning "BHQ_INT_PIN is not defined (not required for BHQ firmware >= 226)"
-// #endif
-
 
 void bhq_init(void);
 void bhq_Disable(void);

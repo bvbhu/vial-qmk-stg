@@ -123,6 +123,14 @@ void uart_init(uint32_t baud) {
     palSetLineMode(UART_TX_PIN, UART_TX_PAL_MODE);
     palSetLineMode(UART_RX_PIN, UART_RX_PAL_MODE);
 #else
+    /* UART_{TX,RX}_PAL_MODE 是裸 AF 编号，PAL_MODE_ALTERNATE() 由下面这行包装；
+     * GPIOv1 分支直接透传，那里写完整 PAL mode。护栏判据取 & ~0xF：AF 编号仅 4 bit。 */
+#if (UART_TX_PAL_MODE & ~0xFU) != 0
+#   error "UART_TX_PAL_MODE must be the bare AF number (7 for USART2 on F411); PAL_MODE_ALTERNATE() is applied by this file"
+#endif
+#if (UART_RX_PAL_MODE & ~0xFU) != 0
+#   error "UART_RX_PAL_MODE must be the bare AF number (7 for USART2 on F411); PAL_MODE_ALTERNATE() is applied by this file"
+#endif
     palSetLineMode(UART_TX_PIN, PAL_MODE_ALTERNATE(UART_TX_PAL_MODE) | PAL_OUTPUT_TYPE_PUSHPULL | PAL_OUTPUT_SPEED_HIGHEST);
     palSetLineMode(UART_RX_PIN, PAL_MODE_ALTERNATE(UART_RX_PAL_MODE) | PAL_OUTPUT_TYPE_PUSHPULL | PAL_OUTPUT_SPEED_HIGHEST);
 #endif

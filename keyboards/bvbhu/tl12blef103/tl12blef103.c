@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * tl12blef103 板级主文件 (与目录同名, QMK 自动加入 SRC)
+ * tl12blef103 kb 主文件 (与目录同名, QMK 自动加入 SRC)
  *
  * 协议基准: https://github.com/LinKeyDream/qmk_firmware_wireless
  *   master      = 720d869a   (0x17 SET_DEV_INFO, 键盘私有)

@@ -32,7 +32,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "sendchar.h"
 #include "eeconfig.h"
 #include "action_layer.h"
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
 #    include "analog/analog_core.h"
 #endif
 #ifdef BOOTMAGIC_ENABLE
@@ -434,7 +434,7 @@ __attribute__((weak)) void housekeeping_task_user(void) {}
  * Invokes hooks for executing code after QMK is done after each loop iteration.
  */
 void housekeeping_task(void) {
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
     analog_task();
 #endif
     housekeeping_task_modules();
@@ -486,7 +486,7 @@ void keyboard_init(void) {
 #endif
     matrix_init();
     quantum_init();
-#ifdef ANALOG_ENABLE
+#ifdef ANALOG_MODEL
     analog_init();
 #endif
 #ifdef CONNECTION_ENABLE

@@ -1,4 +1,4 @@
-/* Copyright 2026 vial-qmk-wireless contributors
+/* Copyright 2026 bvbhu
  * SPDX-License-Identifier: GPL-2.0-only
  */
 

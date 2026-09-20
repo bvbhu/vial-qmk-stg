@@ -191,15 +191,6 @@ bool via_command_bhq(uint8_t *data, uint8_t length) {
     // 此逻辑删除 会失去蓝牙模块升级功能 以及蓝牙改键功能 ！
     uint8_t command_id   = data[0];
 
-    // uint8_t i = 0;
-    // bhq_printf("cmdid:%02x  length:%d\r\n",command_id,length);
-    // bhq_printf("read host app of data \r\n[");
-    // for (i = 0; i < length; i++)
-    // {
-    //     bhq_printf("%02x ",data[i]);
-    // }
-    // bhq_printf("]\r\n");
-
     if(command_id == 0xF1)
     {
         // cmdid + 2 frame headers 

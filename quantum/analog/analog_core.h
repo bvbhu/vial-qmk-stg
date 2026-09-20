@@ -1,4 +1,4 @@
-/* Copyright 2026 vial-qmk-wireless contributors
+/* Copyright 2026 bvbhu
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,10 +24,10 @@
  *  Vial Analog Layer —— 核心运行时(推模型)
  *
  *  核心层(quantum/analog): 持每键配置+校准+运行态与全局参数，跑触发/RT 状态机；
- *      只见 0..ANALOG_MAX_TRAVEL 行程域(满量程板级可配，见 §1.5)，top/bottom_reading
+ *      只见 0..ANALOG_MAX_TRAVEL 行程域(满量程 kb 可配，见 §1.5)，top/bottom_reading
  *      是轴体模型在原始 ADC 域的校准锚点。
  *  模型层(analog_model_*.h): absv -> sw 映射，全 weak，默认线性，见 §8。
- *  板级(keyboards/<x>): 采 ADC，扫描里逐键 analog_model_sw() -> analog_step_key()。
+ *  kb(keyboards/<x>): 采 ADC，扫描里逐键 analog_model_sw() -> analog_step_key()。
  * ========================================================================= */
 
 /* ---- 每键标志位(占用原对齐填充字节) ---- */
@@ -53,7 +53,7 @@ enum {
 #define ANALOG_KI(row, col) ((uint16_t)((row) * ANALOG_MATRIX_COLS + (col)))
 
 /* ---- 1.5 行程域与最大键程 ----
- * ANALOG_MAX_TRAVEL 是行程域满量程(0=顶部/释放, M=触底)，板级 config.h 覆盖，默认 255。
+ * ANALOG_MAX_TRAVEL 是行程域满量程(0=顶部/释放, M=触底)，kb config.h 覆盖，默认 255。
  * 动态宽度：M<=255 用 uint8(默认板零开销)，否则 uint16。判据取 <=255 而非 <255，
  * 否则默认 255 被判成 uint16、协议包与 EEPROM 无谓膨胀。
  * clamp 必须比较 ANALOG_MAX_TRAVEL 而非类型上限——否则小满量程板放过越界、大满量程板提前截断。 */
@@ -133,7 +133,7 @@ extern uint16_t g_analog_tracked_key;
 
 void analog_set_tracked_key(uint16_t ki); /* 越界或 TRACK_NONE 均关闭跟踪 */
 analog_travel_t analog_get_tracked_sw(void); /* 未跟踪时读 0 */
-int16_t analog_get_tracked_raw(void);     /* raw 走板级钩子；未跟踪或不可用读 -1 */
+int16_t analog_get_tracked_raw(void);     /* raw 走 kb 钩子；未跟踪或不可用读 -1 */
 
 /* ---- 5.5 触底校准模式(运行态，绝不落盘) ----
  * 开启时扫描侧抑制全部键输出(等效 KC_NO)、状态机不推进，读数照常采样；
@@ -144,7 +144,7 @@ int16_t analog_get_tracked_raw(void);     /* raw 走板级钩子；未跟踪或�
  * 唯一的正常出口是上位机发 0xF4 mode5，故固件侧备了两道兜底：
  *   ① 开机默认关 —— analog_init() 显式复位(冷启动靠 BSS，但复位/STOP 恢复不清 BSS)
  *   ② 无心跳超时自动关 —— analog_task() 按 ANALOG_BOTTOM_OUT_TIMEOUT_MS
- *      (默认 60s，板级 config.h 可覆盖)判定 */
+ *      (默认 60s，kb config.h 可覆盖)判定 */
 extern bool g_analog_bottom_out_mode;
 void analog_set_bottom_out_mode(bool on);
 bool analog_get_bottom_out_mode(void);
@@ -152,7 +152,7 @@ bool analog_get_bottom_out_mode(void);
 /* 续期心跳(兜底②)：由 vial.c 处理 0xF4 时调用。 */
 void analog_bottom_out_heartbeat(void);
 
-/* ---- 6. 编译期出厂默认值(板级 config.h 覆盖) ----
+/* ---- 6. 编译期出厂默认值(kb config.h 覆盖) ----
  * TL96MG(Hall) 阈值与 ADC 锚点取自参考实现；RT 默认关=出厂即纯阈值滞回。 */
 #ifndef ANALOG_DEFAULT_ACTUATION_THRESHOLD
 #    define ANALOG_DEFAULT_ACTUATION_THRESHOLD 200
@@ -166,17 +166,13 @@ void analog_bottom_out_heartbeat(void);
 #ifndef ANALOG_DEFAULT_RELEASE_OFFSET
 #    define ANALOG_DEFAULT_RELEASE_OFFSET 0
 #endif
-#ifndef ANALOG_DEFAULT_TOP_READING
-#    define ANALOG_DEFAULT_TOP_READING 375
-#endif
-#ifndef ANALOG_DEFAULT_BOTTOM_READING
-#    define ANALOG_DEFAULT_BOTTOM_READING 675
-#endif
-/* 校准锚点的噪声带(见 analog_core.c)：静置读数只接受 ≤ DEFAULT_TOP - GUARD，
- * 触底读数只接受 ≥ DEFAULT_BOTTOM + GUARD。放在本头而非 .c：键程模型层
- * (analog_model_isf.h) 要用它推出派生参数的量级上界并做编译期断言。 */
-#ifndef ANALOG_CAL_GUARD
-#    define ANALOG_CAL_GUARD 8
+/* 静置/触底原始 ADC 出厂锚点(板相关物理量，无通用默认值，必须由 kb config.h 定义)。
+ * 直接用漂移区间内边宏作出厂锚点：出厂态取最小跨度(=> 最大 D)，与生成器选
+ * ISF_SCALE 的最坏角点对齐。线性模型板没有漂移区间，这两个宏就是它的出厂锚点。
+ *   ANALOG_TOPREADING_MAX     出厂静置锚点(漂移区间上边)
+ *   ANALOG_BOTTOMREADING_MIN  出厂触底锚点(漂移区间下边) */
+#if !defined(ANALOG_TOPREADING_MAX) || !defined(ANALOG_BOTTOMREADING_MIN)
+#    error "kb config.h 必须定义 ANALOG_TOPREADING_MAX 与 ANALOG_BOTTOMREADING_MIN（静置/触底原始 ADC 出厂锚点）"
 #endif
 /* 出厂：跟随全局、RT 关闭。全局 rt_enabled 由 FLAGS 推导，避免两处真相。 */
 #ifndef ANALOG_DEFAULT_FLAGS
@@ -191,15 +187,57 @@ _Static_assert(ANALOG_DEFAULT_ACTUATION_THRESHOLD <= ANALOG_MAX_TRAVEL, "出厂�
 _Static_assert(ANALOG_DEFAULT_RELEASE_THRESHOLD <= ANALOG_MAX_TRAVEL, "出厂断开阈值超出 ANALOG_MAX_TRAVEL");
 _Static_assert(ANALOG_DEFAULT_ACTUATION_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 触发距离超出 ANALOG_MAX_TRAVEL");
 _Static_assert(ANALOG_DEFAULT_RELEASE_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 释放距离超出 ANALOG_MAX_TRAVEL");
-/* 触底必须比静置更深：两条 clamp 边界(top ≤ TOP-GUARD、bottom ≥ BOTTOM+GUARD)
- * 只有在 BOTTOM > TOP 时才保证 top < bottom。模型层的派生参数量级断言
- * (analog_model_isf.h) 也用这条来保证它的分母为正。 */
-_Static_assert(ANALOG_DEFAULT_BOTTOM_READING > ANALOG_DEFAULT_TOP_READING, "出厂锚点必须 bottom > top，否则未校准态就倒挂");
+/* 触底必须比静置更深：clamp 边界 top ≤ TOPREADING_MAX 与 bottom ≥ BOTTOMREADING_MIN
+ * 只有在 BOTTOMREADING_MIN > TOPREADING_MAX 时才保证 top < bottom。模型层的派生
+ * 参数量级断言(analog_model_isf.c)也用这条来保证它的分母为正。 */
+_Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX, "出厂锚点必须 bottom > top，否则未校准态就倒挂");
+
+/* ---- 6.5 原始读数域(ADC 位宽与钳位上界) ----
+ * 与具体键程模型无关，故放核心层；模型层(analog_model_*.c)直接用。 */
+
+/* ADC 位宽：从 QMK 的 ADC_RESOLUTION 推导，**不接受 kb 另设参数**。
+ *
+ * 该宏的默认值在 QMK 里是 10 位(platforms/chibios/drivers/analog.c:125 的
+ * `#ifndef ADC_RESOLUTION`，两个分支都是 *_10BIT)。但那是 .c 私有的、头文件看不到，
+ * 故本头在 kb 没定义时按**同样的 10 位**兜底 —— 与 QMK 自身默认保持一致，
+ * 不按某块现成板子的取值来定。
+ *
+ * ⚠️ 必须先判 defined 再比较：`#if` 里未定义的标识符取 0，于是
+ * `ADC_RESOLUTION == ADC_CFGR1_RES_12BIT` 在两者都未定义时是 0==0 → **静默为真**，
+ * 会绕过下面那条报错(看起来"推导成功"，其实什么都没推导)。 */
+#if !defined(ADC_RESOLUTION)
+#    define ANALOG_ADC_BITS 10 /* 与 QMK 的 ADC_RESOLUTION 默认值一致 */
+#elif ADC_RESOLUTION == ADC_CFGR1_RES_12BIT || ADC_RESOLUTION == 12
+#    define ANALOG_ADC_BITS 12
+#elif ADC_RESOLUTION == ADC_CFGR1_RES_10BIT || ADC_RESOLUTION == 10
+#    define ANALOG_ADC_BITS 10
+#elif ADC_RESOLUTION == ADC_CFGR1_RES_8BIT || ADC_RESOLUTION == 8
+#    define ANALOG_ADC_BITS 8
+#elif ADC_RESOLUTION == ADC_CFGR1_RES_6BIT || ADC_RESOLUTION == 6
+#    define ANALOG_ADC_BITS 6
+#else
+#    error "无法由 QMK 的 ADC_RESOLUTION 判定 ADC 位宽(仅支持 12/10/8/6 位)"
+#endif
+_Static_assert(ANALOG_ADC_BITS >= 6 && ANALOG_ADC_BITS <= 12, "ANALOG_ADC_BITS 应落在 6..12");
+
+/* 读数钳位上界：缺省取 ADC 满量程*/
+#ifndef ANALOG_BOTTOMREADING_MAX
+#    define ANALOG_BOTTOMREADING_MAX ((1u << ANALOG_ADC_BITS) - 1u)
+#endif
+_Static_assert(ANALOG_BOTTOMREADING_MAX >= 1u && ANALOG_BOTTOMREADING_MAX <= 65535u, "ANALOG_BOTTOMREADING_MAX 必须在 1..65535");
+
+/* 查表忽略 absv 的低几位(ISF 模型用，每格 2^N 个读数)。放 core 层仅为让构建期
+ * 提取器(util/analog_isf_extract.py)能扫到 #ifndef 兜底；线性模型不读它。
+ * 范围 0..3：过大会让表格数过少、曲线失真，无意义。 */
+#ifndef ANALOG_ISF_IGNORE_BITS
+#    define ANALOG_ISF_IGNORE_BITS 1
+#endif
+_Static_assert(ANALOG_ISF_IGNORE_BITS >= 0 && ANALOG_ISF_IGNORE_BITS <= 3, "ANALOG_ISF_IGNORE_BITS 应在 0..3");
 
 /* ---- 7. 行为 API ---- */
 void analog_init(void); /* 填出厂默认值 + 加载 EEPROM(失败则整区写成合法出厂区) */
 
-/* 推模型状态机：板级扫描逐键调用；返回 true = 按下状态翻转，调用方据此翻矩阵位。 */
+/* 推模型状态机：kb 扫描逐键调用；返回 true = 按下状态翻转，调用方据此翻矩阵位。 */
 bool analog_step_key(uint16_t ki, analog_travel_t sw);
 bool analog_get_pressed(uint16_t ki);
 
@@ -223,7 +261,7 @@ void analog_mark_dirty(uint16_t ki);
 /* 暂缓落盘开关：true 时 persist_mark_* 变 no-op。
  * v3 起 0xF2(调参)仅改 RAM 不落盘——vial_analog_set_wire_config 在处理 0xF2 时
  * set→处理→reset(同步无重入)，故只作用于 0xF2 路径；0xF4 校准 / 0xF5 复位 /
- * 板级扫描的标脏不受影响。用户点 GUI "保存"才发 0xF6 落盘。 */
+ * kb 扫描的标脏不受影响。用户点 GUI "保存"才发 0xF6 落盘。 */
 void analog_set_persist_suppress(bool suppress);
 
 /* 强制释放：只清按下位、不通知模型层、不返回翻转标志。触底校准模式抑制输出用：
@@ -231,13 +269,13 @@ void analog_set_persist_suppress(bool suppress);
 void analog_force_release(uint16_t ki);
 
 /* ---- 8. 键程映射模型层标准钩子 ----
- * 实现在 analog_model_*.h(全 weak)，由 analog_core.c 按 config.h 的 #define 选编，
- * 与构建系统无关；未被任何模型实现的钩子走默认线性，规则见 analog_model.h。 */
+ * 实现在 analog_model_*.c(全 weak，各自定义本对钩子)，由 build_vial.mk 按 kb
+ * rules.mk 的 ANALOG_MODEL 值选编对应 .c；此处只作声明供 analog_core.c 调用。 */
 /* absv: ADC 差值(Hall 0..2047 / EC 0..1023) -> 行程 0..ANALOG_MAX_TRAVEL */
 analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv);
 void analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom); /* 核心改锚点后回调，重算模型派生参数 */
 
-/* 板级实现：返回该键最近一次真实 ADC 读数(absv)，<0 = 不可用。weak 默认 -1。 */
+/* kb 实现：返回该键最近一次真实 ADC 读数(absv)，<0 = 不可用。weak 默认 -1。 */
 int16_t analog_backend_get_raw_adc(uint16_t ki);
 
 /* ---- 9. 持久化：EEPROM 布局 ----
@@ -247,7 +285,7 @@ int16_t analog_backend_get_raw_adc(uint16_t ki);
  *
  * 区址由 QMK 的 EEPROM 分配链决定：nvm_dynamic_keymap.c 把动态宏区尾部
  * 让出 ANALOG_PERSIST_SIZE 字节，链的缩让与 analog_core.c 的寻址共用
- * nvm_eeprom_analog_internal.h，板级 config.h 无需参与。
+ * nvm_eeprom_analog_internal.h，kb config.h 无需参与。
  *
  * 偶地址约定：区首是"从 EEPROM 末尾向前数"(ADDR = TOTAL - SIZE)，所以区首的
  * 奇偶完全由 SIZE 决定。SIZE 取偶 => 区首为偶 => 8 字节头之后的每条记录也都
