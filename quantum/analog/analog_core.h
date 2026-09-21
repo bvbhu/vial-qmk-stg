@@ -21,12 +21,12 @@
 #include <stddef.h>
 
 /* =========================================================================
- *  Vial Analog Layer —— 核心运行时(推模型)
+ *  Vial Analog Layer —— 核心运行时(推送式状态机)
  *
  *  核心层(quantum/analog): 持每键配置+校准+运行态与全局参数，跑触发/RT 状态机；
- *      只见 0..ANALOG_MAX_TRAVEL 行程域(满量程 kb 可配，见 §1.5)，top/bottom_reading
- *      是轴体模型在原始 ADC 域的校准锚点。
- *  模型层(analog_model_*.h): absv -> sw 映射，全 weak，默认线性，见 §8。
+ *      只见 0..ANALOG_MAX_TRAVEL 行程域(最大键程值 kb 可配，见 §1.5)，top/bottom_reading
+ *      是轴体模型在原始 ADC 域的校准端点。
+ *  模型层(analog_model_*.h): absv(adc读数) -> sw(行程值) 映射，全 weak，默认线性，见 §8。
  *  kb(keyboards/<x>): 采 ADC，扫描里逐键 analog_model_sw() -> analog_step_key()。
  * ========================================================================= */
 
@@ -53,10 +53,10 @@ enum {
 #define ANALOG_KI(row, col) ((uint16_t)((row) * ANALOG_MATRIX_COLS + (col)))
 
 /* ---- 1.5 行程域与最大键程 ----
- * ANALOG_MAX_TRAVEL 是行程域满量程(0=顶部/释放, M=触底)，kb config.h 覆盖，默认 255。
+ * ANALOG_MAX_TRAVEL 是行程域最大键程值(0=顶部/释放, M=触底)，kb config.h 覆盖，默认 255。
  * 动态宽度：M<=255 用 uint8(默认板零开销)，否则 uint16。判据取 <=255 而非 <255，
  * 否则默认 255 被判成 uint16、协议包与 EEPROM 无谓膨胀。
- * clamp 必须比较 ANALOG_MAX_TRAVEL 而非类型上限——否则小满量程板放过越界、大满量程板提前截断。 */
+ * clamp 必须比较 ANALOG_MAX_TRAVEL 而非类型上限——否则最大键程值偏小放过越界、偏大提前截断。 */
 #ifndef ANALOG_MAX_TRAVEL
 #    define ANALOG_MAX_TRAVEL 255
 #endif
@@ -70,20 +70,23 @@ typedef uint16_t analog_travel_t;
 #    define ANALOG_TRAVEL_WIDE 1
 #endif
 
-/* ---- 2. 每键运行时(默认满量程下恰好 10 字节) ----
- *   [0..3] 配置(行程域 0..ANALOG_MAX_TRAVEL)  [4..7] 校准锚点(原始 ADC)
+/* ---- 2. 每键运行时(默认最大键程值下恰好 10 字节) ----
+ *   [0..3] 配置(行程域 0..ANALOG_MAX_TRAVEL)  [4..7] 校准端点(原始 ADC)
  *   [8] RT 极值(行程域)        [9] flags
+ *
+ *   RT 极值：按下态跟踪峰值、释放态跟踪谷值——同一个 extremum 字段，方向由当前
+ *   按下位决定(见 analog_core.c 的 analog_step_key)。
  * 存的就是生效值，状态机直读不回查全局(一致性由 FOLLOW_GLOBAL 级联维护)。
  * flags 排在运行态字段之后，故"结构体前缀==持久化记录"不成立：
  * 将来持久化要显式 packed 记录逐字段搬，禁止 memcpy 本结构。 */
 typedef struct {
     analog_travel_t actuation_threshold; /* 下死区界：行程上穿它必定按下 */
     analog_travel_t release_threshold;   /* 上死区界：行程下穿它必定抬起 */
-    analog_travel_t actuation_offset;    /* RT 触发距离：未按下时从极值上行超过它即触发 */
-    analog_travel_t release_offset;      /* RT 释放距离：已按下时从极值回落超过它即释放 */
-    uint16_t bottom_reading;             /* 触底读数 */
-    uint16_t top_reading;                /* 静置读数，每次开机重新采样(不持久化) */
-    analog_travel_t extremum;            /* RT 极值追踪 */
+    analog_travel_t actuation_offset;    /* RT 触发距离：未按下时从 RT 极值上行超过它即触发 */
+    analog_travel_t release_offset;      /* RT 释放距离：已按下时从 RT 极值回落超过它即释放 */
+    uint16_t bottom_reading;             /* 触底校准读数 */
+    uint16_t top_reading;                /* 初始校准读数，每次开机重新采样(不持久化) */
+    analog_travel_t extremum;            /* RT 极值追踪(按下态跟踪峰值、释放态跟踪谷值) */
     uint8_t  flags;                      /* ANALOG_FLAG_* 组合 */
 } analog_key_t;
 
@@ -153,12 +156,12 @@ bool analog_get_bottom_out_mode(void);
 void analog_bottom_out_heartbeat(void);
 
 /* ---- 6. 编译期出厂默认值(kb config.h 覆盖) ----
- * TL96MG(Hall) 阈值与 ADC 锚点取自参考实现；RT 默认关=出厂即纯阈值滞回。 */
+ * RT 默认关，仅在指定点切换。 */
 #ifndef ANALOG_DEFAULT_ACTUATION_THRESHOLD
-#    define ANALOG_DEFAULT_ACTUATION_THRESHOLD 200
+#    define ANALOG_DEFAULT_ACTUATION_THRESHOLD 96
 #endif
 #ifndef ANALOG_DEFAULT_RELEASE_THRESHOLD
-#    define ANALOG_DEFAULT_RELEASE_THRESHOLD 192
+#    define ANALOG_DEFAULT_RELEASE_THRESHOLD 160
 #endif
 #ifndef ANALOG_DEFAULT_ACTUATION_OFFSET
 #    define ANALOG_DEFAULT_ACTUATION_OFFSET 0
@@ -166,13 +169,16 @@ void analog_bottom_out_heartbeat(void);
 #ifndef ANALOG_DEFAULT_RELEASE_OFFSET
 #    define ANALOG_DEFAULT_RELEASE_OFFSET 0
 #endif
-/* 静置/触底原始 ADC 出厂锚点(板相关物理量，无通用默认值，必须由 kb config.h 定义)。
- * 直接用漂移区间内边宏作出厂锚点：出厂态取最小跨度(=> 最大 D)，与生成器选
- * ISF_SCALE 的最坏角点对齐。线性模型板没有漂移区间，这两个宏就是它的出厂锚点。
- *   ANALOG_TOPREADING_MAX     出厂静置锚点(漂移区间上边)
- *   ANALOG_BOTTOMREADING_MIN  出厂触底锚点(漂移区间下边) */
+/* 初始/触底原始 ADC 默认校准值(板相关物理量，无通用默认值，必须由 kb config.h 定义)。
+ *
+ * ⚠️ 双角色：这两个宏**既是默认校准值，又是 top/bottom 的钳位边界**——
+ *   ANALOG_TOPREADING_MAX     默认校准值(top 的上界：top ≤ 它)
+ *   ANALOG_BOTTOMREADING_MIN  默认校准值(bottom 的下界：bottom ≥ 它)
+ * 即 clamp 区间与出厂默认值共用同一组常量(另一端由 ANALOG_TOPREADING_MIN /
+ * ANALOG_BOTTOMREADING_MAX 补齐，见 analog_core.c 的校准端点区间)。改注释或
+ * 调值时两层含义都要顾到，否则会误以为它们只是出厂初值。 */
 #if !defined(ANALOG_TOPREADING_MAX) || !defined(ANALOG_BOTTOMREADING_MIN)
-#    error "kb config.h 必须定义 ANALOG_TOPREADING_MAX 与 ANALOG_BOTTOMREADING_MIN（静置/触底原始 ADC 出厂锚点）"
+#    error "kb config.h 必须定义 ANALOG_TOPREADING_MAX 与 ANALOG_BOTTOMREADING_MIN（初始/触底原始 ADC 默认校准值）"
 #endif
 /* 出厂：跟随全局、RT 关闭。全局 rt_enabled 由 FLAGS 推导，避免两处真相。 */
 #ifndef ANALOG_DEFAULT_FLAGS
@@ -180,17 +186,17 @@ void analog_bottom_out_heartbeat(void);
 #endif
 #define ANALOG_DEFAULT_RT_ENABLED ((ANALOG_DEFAULT_FLAGS & ANALOG_FLAG_RT_ENABLED) ? 1 : 0)
 
-/* 出厂阈值必须落在行程域内：满量程被调小时(如 ANALOG_MAX_TRAVEL=100)若忘了同步
- * 改这几个默认值，出厂态就是"阈值高于满量程"——键永远触发不了，且因为
+/* 出厂阈值必须落在行程域内：最大键程值被调小时(如 ANALOG_MAX_TRAVEL=100)若忘了同步
+ * 改这几个默认值，出厂态就是"阈值高于最大键程值"——键永远触发不了，且因为
  * ANALOG_DEFAULT_* 都是编译期常量，这种错配只能在编译期抓。 */
 _Static_assert(ANALOG_DEFAULT_ACTUATION_THRESHOLD <= ANALOG_MAX_TRAVEL, "出厂触发阈值超出 ANALOG_MAX_TRAVEL");
 _Static_assert(ANALOG_DEFAULT_RELEASE_THRESHOLD <= ANALOG_MAX_TRAVEL, "出厂断开阈值超出 ANALOG_MAX_TRAVEL");
 _Static_assert(ANALOG_DEFAULT_ACTUATION_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 触发距离超出 ANALOG_MAX_TRAVEL");
 _Static_assert(ANALOG_DEFAULT_RELEASE_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 释放距离超出 ANALOG_MAX_TRAVEL");
-/* 触底必须比静置更深：clamp 边界 top ≤ TOPREADING_MAX 与 bottom ≥ BOTTOMREADING_MIN
+/* 触底校准读数必须比初始校准读数更深：clamp 边界 top ≤ TOPREADING_MAX 与 bottom ≥ BOTTOMREADING_MIN
  * 只有在 BOTTOMREADING_MIN > TOPREADING_MAX 时才保证 top < bottom。模型层的派生
  * 参数量级断言(analog_model_isf.c)也用这条来保证它的分母为正。 */
-_Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX, "出厂锚点必须 bottom > top，否则未校准态就倒挂");
+_Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX, "默认校准值必须 bottom > top，否则无效读数态就倒挂");
 
 /* ---- 6.5 原始读数域(ADC 位宽与钳位上界) ----
  * 与具体键程模型无关，故放核心层；模型层(analog_model_*.c)直接用。 */
@@ -220,15 +226,16 @@ _Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX, "出厂锚点�
 #endif
 _Static_assert(ANALOG_ADC_BITS >= 6 && ANALOG_ADC_BITS <= 12, "ANALOG_ADC_BITS 应落在 6..12");
 
-/* 读数钳位上界：缺省取 ADC 满量程*/
+/* 读数钳位上界：缺省取 ADC 读数上限*/
 #ifndef ANALOG_BOTTOMREADING_MAX
 #    define ANALOG_BOTTOMREADING_MAX ((1u << ANALOG_ADC_BITS) - 1u)
 #endif
 _Static_assert(ANALOG_BOTTOMREADING_MAX >= 1u && ANALOG_BOTTOMREADING_MAX <= 65535u, "ANALOG_BOTTOMREADING_MAX 必须在 1..65535");
 
-/* 查表忽略 absv 的低几位(ISF 模型用，每格 2^N 个读数)。放 core 层仅为让构建期
+/* ANALOG_ISF_IGNORE_BITS(ISF 模型用)：查表求下标时对 adc读数(absv)的**右移位数**，
+ * 即 idx = absv >> N，故每个表项覆盖 2^N 个读数。放 core 层仅为让构建期
  * 提取器(util/analog_isf_extract.py)能扫到 #ifndef 兜底；线性模型不读它。
- * 范围 0..3：过大会让表格数过少、曲线失真，无意义。 */
+ * 范围 0..3：过大会让表项数过少、曲线失真，无意义。 */
 #ifndef ANALOG_ISF_IGNORE_BITS
 #    define ANALOG_ISF_IGNORE_BITS 1
 #endif
@@ -237,11 +244,11 @@ _Static_assert(ANALOG_ISF_IGNORE_BITS >= 0 && ANALOG_ISF_IGNORE_BITS <= 3, "ANAL
 /* ---- 7. 行为 API ---- */
 void analog_init(void); /* 填出厂默认值 + 加载 EEPROM(失败则整区写成合法出厂区) */
 
-/* 推模型状态机：kb 扫描逐键调用；返回 true = 按下状态翻转，调用方据此翻矩阵位。 */
+/* 推送式状态机：kb 扫描逐键调用；返回 true = 按下状态翻转，调用方据此翻矩阵位。 */
 bool analog_step_key(uint16_t ki, analog_travel_t sw);
 bool analog_get_pressed(uint16_t ki);
 
-/* 校准量写入：都会回调模型层重算派生参数(§8)。 */
+/* 校准端点写入：都会回调模型层重算派生参数(§8)。 */
 void analog_set_top_reading(uint16_t ki, uint16_t value);    /* 启动校准用 */
 void analog_set_bottom_reading(uint16_t ki, uint16_t value); /* 触底校准用 */
 
@@ -255,7 +262,7 @@ bool analog_reset_key(uint16_t ki);
 bool analog_key_is_customized(uint16_t ki); /* <=> FOLLOW_GLOBAL 未置位，无需按值比对 */
 
 /* 标脏：调用方直接改过 g_analog_key[ki].flags 后告知核心，由 analog_task 防抖统一落盘。
- * 只改运行态(如 extremum)或改锚点请走 analog_set_*_reading，不要用本函数。 */
+ * 只改运行态(如 extremum)或改校准端点请走 analog_set_*_reading，不要用本函数。 */
 void analog_mark_dirty(uint16_t ki);
 
 /* 暂缓落盘开关：true 时 persist_mark_* 变 no-op。
@@ -271,9 +278,10 @@ void analog_force_release(uint16_t ki);
 /* ---- 8. 键程映射模型层标准钩子 ----
  * 实现在 analog_model_*.c(全 weak，各自定义本对钩子)，由 build_vial.mk 按 kb
  * rules.mk 的 ANALOG_MODEL 值选编对应 .c；此处只作声明供 analog_core.c 调用。 */
-/* absv: ADC 差值(Hall 0..2047 / EC 0..1023) -> 行程 0..ANALOG_MAX_TRAVEL */
+/* absv(adc读数)：kb 由原始 ADC 换算的差值绝对值(Hall 0..2047 / EC 0..1023)，核心层不碰 ADC
+ *  -> sw(行程值)：行程域值，范围 0..ANALOG_MAX_TRAVEL */
 analog_travel_t analog_model_sw(uint16_t ki, uint16_t absv);
-void analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom); /* 核心改锚点后回调，重算模型派生参数 */
+void analog_backend_calibration_changed(uint16_t ki, uint16_t top, uint16_t bottom); /* 核心改校准端点后回调，重算模型派生参数 */
 
 /* kb 实现：返回该键最近一次真实 ADC 读数(absv)，<0 = 不可用。weak 默认 -1。 */
 int16_t analog_backend_get_raw_adc(uint16_t ki);
@@ -295,13 +303,18 @@ int16_t analog_backend_get_raw_adc(uint16_t ki);
  * 行程域宽度写进记录尺寸(8 -> 12)会改变 SIZE，而记录里的 record_bytes 与
  * version 一起构成作废判据，故换宽度的板子开机即整区作废重写，不会读到错位的旧数据。 */
 #define ANALOG_PERSIST_MAGIC         0x474E4156u /* "VANG"，小端存放 */
-/* EEPROM 布局版本(§9)：与 magic / num_keys / record_bytes 构成 persist_load 的
- * 作废判据，版本不符整区重写。 1=初版；2=行程域宽度可变(记录尺寸 8->12)。
- * 改动落盘布局须 bump 本宏。**与 VIAL_ANALOG_PROTOCOL_VERSION(quantum/vial.c，
- * 空口命令线格式版本)语义无关、取值不同，无联动**——改其一不必动另一个。 */
-#define ANALOG_PERSIST_VERSION       2u
+/* 统一版本号：空口命令线格式(0xF0-0xF6)与 EEPROM 落盘布局**共用同一个值**。
+ * 原先是两个彼此独立的宏(线上的 VIAL_ANALOG_PROTOCOL_VERSION 与落盘的
+ * ANALOG_PERSIST_VERSION)，现合并为一处——本项目尚无外部使用者，没必要维持
+ * 两套独立编号；等有他人使用后再考虑是否需要重新拆开。
+ * 本宏同时是 persist_load 的作废判据之一(与 magic / num_keys / record_bytes
+ * 一起)，版本不符整区重写。故**任一端**(线格式或落盘布局)有改动都必须 bump
+ * 本宏：旧 EEPROM 会在开机时整区作废并回写出厂默认值，而不是静默错位。
+ * 真源在此(核心层是本宏唯一的公共落脚点：vial.c 的协议段在上面已 include
+ * 本头；GUI 侧 protocol/constants.py 的 ANALOG_PROTOCOL_VERSION 须等值)。 */
+#define VIAL_ANALOG_PROTOCOL_VERSION 1u
 
-/* 字段顺序即落盘布局；改动须 bump ANALOG_PERSIST_VERSION。
+/* 字段顺序即落盘布局；改动须 bump VIAL_ANALOG_PROTOCOL_VERSION。
  * reserved 把记录补齐到偶数字节：记录地址全落在偶地址(FEE 按半字写最优)，
  * 结构体内零对齐填充。 */
 typedef struct {
@@ -343,7 +356,7 @@ _Static_assert((ANALOG_PERSIST_SIZE % 2) == 0, "ANALOG_PERSIST_SIZE 必须为偶
  * 扫描中的实时校准会反复推高 bottom_reading，逐次写会撑爆 FEE 写日志。 */
 void analog_task(void);
 
-/* 显式保存(0xF6)：全量落盘当前 RAM 状态(配置+锚点+全局+头校验和)。
+/* 显式保存(0xF6)：全量落盘当前 RAM 状态(配置+校准端点+全局+头校验和)。
  * 与 analog_task 的脏标记防抖增量提交不同：本函数一次性写全部记录，
  * 供 GUI "保存"按钮把 0xF2 调参期间只改了 RAM 的阈值真正写入 EEPROM。 */
 void analog_persist_commit(void);

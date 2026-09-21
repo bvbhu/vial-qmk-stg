@@ -25,7 +25,7 @@
 #   include "lpm.h"
 #endif
 
-void calibrate_matrix(void); /* stg65_ec_matrix.c：开机静置校准 */
+void calibrate_matrix(void); /* stg65_ec_matrix.c：开机采样初始校准读数 */
 
 void board_init(void) {
 #if defined(BLUETOOTH_BHQ)
@@ -37,7 +37,7 @@ void board_init(void) {
 
 void keyboard_post_init_kb(void) {
     /* analog_init 在 keyboard_post_init_quantum 链尾之前已完成，
-     * 此时静置采样写入 top_reading 才会被核心层正确接受 */
+     * 此时初始校准读数采样写入 top_reading 才会被核心层正确接受 */
     calibrate_matrix();
     keyboard_post_init_user(); /* 覆盖了弱默认实现，必须手动回调 keymap 层 */
 }

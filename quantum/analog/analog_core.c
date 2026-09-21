@@ -39,7 +39,7 @@ _Static_assert(ANALOG_NUM_KEYS <= 255, "持久化头部 num_keys 是单字节");
 #    define ANALOG_PERSIST_FLUSH_MS 500u
 #endif
 
-/* 校准锚点安全边界(校准不变量) ---- */
+/* 校准端点区间(校准不变量) ---- */
 #ifdef ANALOG_TOPREADING_MIN
 #    define ANALOG_TOPREADING_CLAMP_LO ((uint16_t)ANALOG_TOPREADING_MIN)
 _Static_assert(ANALOG_TOPREADING_MIN >= 1, "ANALOG_TOPREADING_MIN 必须 >= 1：top==0 会让模型层跳过派生参数重算，与 mapping 失配");
@@ -47,8 +47,8 @@ _Static_assert(ANALOG_TOPREADING_MIN >= 1, "ANALOG_TOPREADING_MIN 必须 >= 1：
 #    define ANALOG_TOPREADING_CLAMP_LO ((uint16_t)1)
 #endif
 
-_Static_assert((uint32_t)ANALOG_TOPREADING_MAX >= (uint32_t)ANALOG_TOPREADING_CLAMP_LO, "读数区间倒挂：TOPREADING_MAX < TOPREADING_MIN");
-_Static_assert((uint32_t)ANALOG_BOTTOMREADING_MAX >= (uint32_t)ANALOG_BOTTOMREADING_MIN, "读数区间倒挂：BOTTOMREADING_MAX < BOTTOMREADING_MIN");
+_Static_assert((uint32_t)ANALOG_TOPREADING_MAX >= (uint32_t)ANALOG_TOPREADING_CLAMP_LO, "校准端点区间倒挂：TOPREADING_MAX < TOPREADING_MIN");
+_Static_assert((uint32_t)ANALOG_BOTTOMREADING_MAX >= (uint32_t)ANALOG_BOTTOMREADING_MIN, "校准端点区间倒挂：BOTTOMREADING_MAX < BOTTOMREADING_MIN");
 
 static uint16_t clamp_top_reading(uint16_t value) {
     if (value < ANALOG_TOPREADING_CLAMP_LO) return ANALOG_TOPREADING_CLAMP_LO;
@@ -61,8 +61,8 @@ static uint16_t clamp_bottom_reading(uint16_t value) {
 }
 
 /* 行程域饱和：把任意宽度的入参收进 0..ANALOG_MAX_TRAVEL。
- * 必须比较 ANALOG_MAX_TRAVEL 而非 analog_travel_t 的最大值——满量程小于类型
- * 上限时(如满量程 300 而类型是 uint16)，类型本身拦不住越界值，而越界阈值会让
+ * 必须比较 ANALOG_MAX_TRAVEL 而非 analog_travel_t 的最大值——最大键程值小于类型
+ * 上限时(如最大键程值 300 而类型是 uint16)，类型本身拦不住越界值，而越界阈值会让
  * 键永远触发不了(sw > act 恒不成立)。EEPROM 里的旧值、GUI 传来的值都过这里。 */
 static inline analog_travel_t clamp_travel(uint32_t value) {
     return (value > (uint32_t)ANALOG_MAX_TRAVEL) ? (analog_travel_t)ANALOG_MAX_TRAVEL : (analog_travel_t)value;
@@ -146,7 +146,7 @@ static void persist_write_header(void) {
     analog_persist_header_t h;
     memset(&h, 0, sizeof(h));
     h.magic        = ANALOG_PERSIST_MAGIC;
-    h.version      = ANALOG_PERSIST_VERSION;
+    h.version      = VIAL_ANALOG_PROTOCOL_VERSION;
     h.num_keys     = (uint8_t)ANALOG_NUM_KEYS;
     h.record_bytes = ANALOG_PERSIST_RECORD_BYTES;
     h.checksum     = persist_checksum_ram();
@@ -190,12 +190,12 @@ static void persist_flush_dirty(void) {
 static bool persist_load(void) {
     analog_persist_header_t h;
     eeprom_read_block(&h, (const void *)(uintptr_t)ANALOG_EEPROM_BASE, sizeof(h));
-    if (h.magic != ANALOG_PERSIST_MAGIC || h.version != ANALOG_PERSIST_VERSION || h.num_keys != (uint8_t)ANALOG_NUM_KEYS || h.record_bytes != ANALOG_PERSIST_RECORD_BYTES) return false;
+    if (h.magic != ANALOG_PERSIST_MAGIC || h.version != VIAL_ANALOG_PROTOCOL_VERSION || h.num_keys != (uint8_t)ANALOG_NUM_KEYS || h.record_bytes != ANALOG_PERSIST_RECORD_BYTES) return false;
     if (persist_checksum_eeprom() != h.checksum) return false;
 
     eeprom_read_block(&g_analog_global, (const void *)(uintptr_t)ANALOG_PERSIST_GLOBAL_BASE, sizeof(g_analog_global));
-    /* 全局段过 clamp：满量程被调小的板子(如 1023 -> 300)记录尺寸不变，整区不会作废，
-     * 会原样读回"旧满量程下写的"阈值；直接沿用会让跟随全局的键永远触发不了。 */
+    /* 全局段过 clamp：最大键程值被调小的板子(如 1023 -> 300)记录尺寸不变，整区不会作废，
+     * 会原样读回"旧最大键程值下写的"阈值；直接沿用会让跟随全局的键永远触发不了。 */
     g_analog_global.actuation_threshold = clamp_travel(g_analog_global.actuation_threshold);
     g_analog_global.release_threshold   = clamp_travel(g_analog_global.release_threshold);
     g_analog_global.actuation_offset    = clamp_travel(g_analog_global.actuation_offset);
@@ -217,7 +217,7 @@ static bool persist_load(void) {
             k->actuation_offset    = clamp_travel(r.actuation_offset);
             k->release_offset      = clamp_travel(r.release_offset);
         }
-        k->bottom_reading = clamp_bottom_reading(r.bottom_reading); /* 旧固件可能写过越界锚点 */
+        k->bottom_reading = clamp_bottom_reading(r.bottom_reading); /* 旧固件可能写过越界校准端点 */
         /* 只收本版本认识的位：EEPROM 里的 bit3..7 按约定恒 0，万一被外部工具写脏
          * 也绝不带进 RAM——否则下次落盘会把脏位原样写回，永久留在区里。 */
         k->flags          = r.flags & (ANALOG_FLAG_RT_ENABLED | ANALOG_FLAG_FOLLOW_GLOBAL | ANALOG_FLAG_CONTINUOUS);
@@ -323,7 +323,7 @@ void analog_init(void) {
     analog_set_bottom_out_mode(false);
 
     if (!persist_load()) persist_flush_all(); /* 首次上机/布局变更/校验失败：写成合法区 */
-    /* 锚点已定(出厂或 EEPROM)，重算模型派生参数(ISF 的 D/K 等) */
+    /* 校准端点已定(默认校准值或 EEPROM)，重算模型派生参数(ISF 的 D/K 等) */
     for (uint16_t i = 0; i < ANALOG_NUM_KEYS; i++) {
         analog_backend_calibration_changed(i, g_analog_key[i].top_reading, g_analog_key[i].bottom_reading);
     }
@@ -356,7 +356,7 @@ bool analog_step_key(uint16_t ki, analog_travel_t sw) {
             pressed_set(ki, false);
             return true;
         }
-        /* 已在释放态：继续跟踪谷值，理由同下死区 */
+        /* 已在释放态：继续跟踪 RT 极值(谷值)，理由同下死区 */
         if (sw < k->extremum) k->extremum = sw;
         return false;
     }
@@ -368,9 +368,10 @@ bool analog_step_key(uint16_t ki, analog_travel_t sw) {
             pressed_set(ki, true);
             return true;
         }
-        /* 已在按下态：仍要继续跟踪峰值。若此处不更新 extremum，峰值会冻结在刚越过
-         * act 的一刻，RT 释放判据退化成"自 act 附近回落"而非"自真实峰值回落"
-         * (act=200/峰值=255/off=20 时应 235 释放，实际要退到 ~180)，手感变钝。 */
+        /* 已在按下态：仍要继续跟踪 RT 极值(峰值)。若此处不更新 extremum，RT 极值会
+         * 冻结在刚越过 act 的一刻，RT 释放判据退化成"自 act 附近回落"而非"自真实
+         * RT 极值(峰值)回落"(act=200/峰值=255/off=20 时应 235 释放，实际要退到
+         * ~180)，手感变钝。 */
         if (sw > k->extremum) k->extremum = sw;
         return false;
     }
@@ -382,22 +383,22 @@ bool analog_step_key(uint16_t ki, analog_travel_t sw) {
         int off = (int)k->release_offset; /* 0 => 该方向不跟踪 */
         if (off != 0) {
             if ((int)sw > (int)k->extremum) {
-                k->extremum = sw; /* 继续下压：抬高峰值 */
+                k->extremum = sw; /* 继续下压：抬高 RT 极值(峰值) */
             } else if ((int)sw < (int)k->extremum - off) {
                 k->extremum = sw;
                 pressed_set(ki, false);
-                return true; /* 自峰值回落超过 release_offset：RT 释放 */
+                return true; /* 自 RT 极值(峰值)回落超过 release_offset：RT 释放 */
             }
         }
     } else {
         int off = (int)k->actuation_offset; /* 0 => 该方向不跟踪 */
         if (off != 0) {
             if ((int)sw < (int)k->extremum) {
-                k->extremum = sw; /* 继续抬起：压低谷值 */
+                k->extremum = sw; /* 继续抬起：压低 RT 极值(谷值) */
             } else if ((int)sw > (int)k->extremum + off) {
                 k->extremum = sw;
                 pressed_set(ki, true);
-                return true; /* 自谷值上行超过 actuation_offset：RT 触发 */
+                return true; /* 自 RT 极值(谷值)上行超过 actuation_offset：RT 触发 */
             }
         }
     }
@@ -478,7 +479,7 @@ void analog_set_global(const analog_global_t *g) {
 /* ---- 复位 ---- */
 bool analog_reset_key(uint16_t ki) {
     if (ki == 0xFFFF) {
-        /* 出厂重置：连校准锚点一起回编译期默认值，逐键通知模型重算派生参数。 */
+        /* 出厂重置：连校准端点一起回编译期默认校准值，逐键通知模型重算派生参数。 */
         fill_defaults();
         for (uint16_t i = 0; i < ANALOG_NUM_KEYS; i++) {
             analog_backend_calibration_changed(i, g_analog_key[i].top_reading, g_analog_key[i].bottom_reading);
@@ -548,7 +549,7 @@ void analog_set_bottom_out_mode(bool on) {
     analog_bottom_out_heartbeat();
     if (on) {
         /* 进入即清全部按下位：模式期间扫描侧清零矩阵位，退出后不残留"幽灵按下"。
-         * 不通知模型层(锚点没变)，也不标脏(运行态不落盘)。 */
+         * 不通知模型层(校准端点没变)，也不标脏(运行态不落盘)。 */
         memset(g_analog_pressed_bits, 0, sizeof(g_analog_pressed_bits));
     }
 }

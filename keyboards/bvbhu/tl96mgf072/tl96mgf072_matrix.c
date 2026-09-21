@@ -1,7 +1,7 @@
 #include "tl96mgf072.h"
 #include "print.h"
 #include "analog.h"              /* QMK ADC 驱动：adc_mux / pinToMux / adc_read */
-#include "analog/analog_core.h"  /* 核心层：推模型状态机 + 持久化 */
+#include "analog/analog_core.h"  /* 核心层：推送式状态机 + 持久化 */
 #include "matrix.h"
 #include "wait.h"
 #include "bootloader.h"
@@ -24,8 +24,8 @@ int16_t analog_backend_get_raw_adc(uint16_t ki)
     return (int16_t)last_absv[row][col];
 }
 
-// 开机校准：采样各键静置读数(噪声基底)写入 top_reading，重算模型派生参数。
-// bottom_reading 是持久化的物理锚点，这里不动；触底由实时校准推高并防抖落盘。
+// 开机校准：采样各键初始校准读数写入 top_reading，重算模型派生参数。
+// bottom_reading 是持久化的物理校准端点，这里不动；触底由实时校准推高并防抖落盘。
 void calibrate_matrix(void)
 {
     uint16_t noise_floor_accum[MATRIX_ROWS][MATRIX_COLS] = { 0 };
@@ -41,7 +41,7 @@ void calibrate_matrix(void)
                 uint16_t adc_value_fornoise = adc_read(adcMux[row]);
                 uint16_t absv = adc_value_fornoise <= 2047 ? 2047 - adc_value_fornoise : adc_value_fornoise - 2048;
                 // 异常样本(采样期间该键被按下)直接丢弃，不计入均值：旧写法把它替换成
-                // 一个无关常量再照常累加，等于人为拉高该键的噪声基底。
+                // 一个无关常量再照常累加，等于人为拉高该键的初始校准读数。
                 if (absv > ANALOG_BOTTOMREADING_MIN) { noise_floor_valid[row][col]--; continue; }
                 noise_floor_accum[row][col] += absv;
             }
@@ -53,7 +53,7 @@ void calibrate_matrix(void)
         for (uint8_t col = 0; col < MATRIX_COLS; col++)
         {
             uint16_t n = 20 + noise_floor_valid[row][col];
-            // 全部样本都异常(该键整轮被按住)：保留出厂锚点，别写 0
+            // 全部样本都异常(该键整轮被按住)：保留默认校准值，别写 0
             if (n == 0) continue;
             analog_set_top_reading(row * MATRIX_COLS + col, (uint16_t)(noise_floor_accum[row][col] / n));
         }
@@ -84,7 +84,7 @@ void matrix_init(void) // 初始化矩阵
 uint8_t matrix_scan(void) // 矩阵扫描
 {
     bool updated = false;
-    // 扫描所有列：ADC -> absv -> 模型键程 sw，逐键推进核心状态机(推模型)
+    // 扫描所有列：ADC -> absv -> 模型键程 sw，逐键推进核心状态机(推送式状态机)
     for (uint8_t col = 0; col < MATRIX_COLS; col++)
     {
         gpio_write_pin_high(col_pins[col]); // 激活当前列
@@ -110,19 +110,19 @@ uint8_t matrix_scan(void) // 矩阵扫描
                 continue;
             }
 
-            // 实时校准(顶部/触底读数)：读数持续偏离锚点才更新，防抖落盘在 analog_task
+            // 实时校准(顶部/触底读数)：读数持续偏离校准端点才更新，防抖落盘在 analog_task
             if (absv < (int)ANALOG_TOP_READING(row, col) - CALIBRATION_THRESHOLD)
                 analog_set_top_reading(ki, absv);
             else if (absv > (int)ANALOG_BOTTOM_READING(row, col) + CALIBRATION_THRESHOLD)
                 analog_set_bottom_reading(ki, absv);
-            // 静置基点回升：只降不升会让长期(温度)漂移单向累积，所有键的行程被
+            // 初始校准读数回升：只降不升会让长期(温度)漂移单向累积，所有键的行程被
             // 系统性抬高。读数明显高于当前 top 时按 1 LSB 缓慢跟上去。
             else if (absv > (int)ANALOG_TOP_READING(row, col) + CALIBRATION_THRESHOLD)
                 analog_set_top_reading(ki, (uint16_t)(ANALOG_TOP_READING(row, col) + 1));
 
             last_absv[row][col] = absv;
 
-            // 推模型：返回 true = 按下状态翻转，据此翻矩阵位
+            // 推送式状态机：返回 true = 按下状态翻转，据此翻矩阵位
             if (analog_step_key(ki, analog_model_sw(ki, absv)))
             {
                 updated = true;

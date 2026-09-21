@@ -90,21 +90,20 @@ __attribute__((unused)) static uint16_t vial_keycode_firewall(uint16_t in) {
 #ifdef ANALOG_MODEL
 /* ==== Vial Analog 协议扩展(0xF0-0xF6)：线格式翻译层 ====
  * 命令语义见 docs/vial-analog-protocol.md。行程域 0..ANALOG_MAX_TRAVEL，轴体无关。
- * 线上 config ↔ 推模型核心(analog_core.h) 的字段映射：
+ * 线上 config ↔ 推送式状态机核心(analog_core.h) 的字段映射：
  *   actuation_point/release_point -> actuation/release_threshold(行程域阈值)
  *   rt_down/rt_up                 -> actuation/release_offset(RT 触发/释放距离)
  *   flags bit0 RT_ENABLED         -> ANALOG_FLAG_RT_ENABLED(同义)
  *   flags bit1 ACTUATION_OVERRIDE -> !FOLLOW_GLOBAL(线上 1=已自定义，与核心位相反)
  *   flags bit2 CONTINUOUS         -> ANALOG_FLAG_CONTINUOUS(随 flags 落盘)
- *   raw_rest/raw_full             -> top/bottom_reading(原始 ADC 域锚点)
- * ki=0xFFFF 是全局默认槽：只有 5 项阈值+RT 有意义，锚点/CONTINUOUS 对全局无意义；
+ *   raw_rest/raw_full             -> top/bottom_reading(原始 ADC 域校准端点)
+ * ki=0xFFFF 是全局默认槽：只有 5 项阈值+RT 有意义，校准端点/CONTINUOUS 对全局无意义；
  * 写全局经 analog_set_global 级联刷新所有跟随键，GUI 无需(也不应)逐键补写。 */
 
-/* 协议版本基线号；线格式/语义改动须 bump，GUI constants.py 同步。
- * 版本史已重置，从 1 起算，不留旧版本分支。
- * 与 ANALOG_PERSIST_VERSION(analog_core.h §9，EEPROM 布局版本)语义无关、
- * 取值也不同：本宏管空口命令线格式，那个管落盘记录能否复用，改其一不必动另一个。 */
-#define VIAL_ANALOG_PROTOCOL_VERSION 1
+/* 协议版本基线号：定义于 analog_core.h(线格式与 EEPROM 落盘布局共用同一编号，
+ * 见该处的说明)。改动须 bump：本处、analog_core.h 的同名宏与 GUI constants.py
+ * 同步；旧 EEPROM 会随之整区作废回出厂值。 */
+
 
 /* 协议层轴类型(仅供 GUI 显示)：核心层不持轴概念，按所选模型宏推导，kb 可覆盖 */
 #ifndef ANALOG_PROTOCOL_AXIS_TYPE
@@ -121,7 +120,7 @@ enum {
     VIAL_ANALOG_CAP_CALIBRATION       = (1 << 2),
     VIAL_ANALOG_CAP_LIVE_READINGS     = (1 << 3),
     VIAL_ANALOG_CAP_PER_KEY_RELEASE   = (1 << 4),
-    /* 触底校准开关(0xF4 mode 4/5)：开启时全部键等效 KC_NO，逐个按满即采集触底锚点 */
+    /* 触底校准开关(0xF4 mode 4/5)：开启时全部键等效 KC_NO，逐个按满即采集触底校准读数 */
     VIAL_ANALOG_CAP_BOTTOM_OUT_CAL    = (1 << 5),
     /* bit6 预留(AUTO_CAL：AUTO_PEAK 未实现，0xF4 mode3 返回错误码) */
     VIAL_ANALOG_CAPS_FLAGS = (VIAL_ANALOG_CAP_PER_KEY_ACTUATION | VIAL_ANALOG_CAP_RAPID_TRIGGER | VIAL_ANALOG_CAP_CALIBRATION | VIAL_ANALOG_CAP_LIVE_READINGS | VIAL_ANALOG_CAP_PER_KEY_RELEASE | VIAL_ANALOG_CAP_BOTTOM_OUT_CAL),
@@ -151,7 +150,7 @@ enum {
 /* 每键配置线格式。4 项阈值宽度 = analog_travel_t(行程域宽度)，其余定长：
  *   行程域 uint8  -> 12 字节，raw_rest 在 [6..7]
  *   行程域 uint16 -> 16 字节，raw_rest 在 [10..11]
- * 宽度由 0xF0 的 msg[6](= 本结构 sizeof)与 msg[8..9](满量程)共同声明；
+ * 宽度由 0xF0 的 msg[6](= 本结构 sizeof)与 msg[8..9](最大键程值)共同声明；
  * GUI 必须先读 caps 再解析，不得写死字段偏移。 */
 typedef struct __attribute__((packed)) {
     analog_travel_t actuation_point;
@@ -184,7 +183,7 @@ static void vial_analog_get_wire_config(uint16_t ki, vial_analog_wire_config_t *
         c->rt_down         = g_analog_global.actuation_offset;
         c->rt_up           = g_analog_global.release_offset;
         if (g_analog_global.rt_enabled) c->flags = VIAL_ANALOG_FLAG_RT_ENABLED;
-        c->raw_rest = ANALOG_TOPREADING_MAX;    /* 全局槽不持锚点：回出厂参考值 */
+        c->raw_rest = ANALOG_TOPREADING_MAX;    /* 全局槽不持初始校准读数：回默认校准值 */
         c->raw_full = ANALOG_BOTTOMREADING_MIN;
         return;
     }
@@ -214,7 +213,7 @@ static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_w
     if (ki >= ANALOG_NUM_KEYS) return 1;
 
     /* ACTUATION_OVERRIDE=0 表示"该键归全局管"：先按 0xF5 单键复位的语义回到跟随态
-     * (取全局阈值+RT 位、置 FOLLOW_GLOBAL)，校准锚点不动——锚点是本键物理量。
+     * (取全局阈值+RT 位、置 FOLLOW_GLOBAL)，校准端点不动——校准端点是本键物理量。
      * 否则走自定义路径：set_key_config 无条件清 FOLLOW_GLOBAL 即是"转自定义"。 */
     if (!(c->flags & VIAL_ANALOG_FLAG_ACTUATION_OVERRIDE)) {
         analog_reset_key(ki);
@@ -231,7 +230,7 @@ static uint8_t vial_analog_set_wire_config_impl(uint16_t ki, const vial_analog_w
         g_analog_key[ki].flags = (uint8_t)((g_analog_key[ki].flags & (uint8_t)~ANALOG_FLAG_CONTINUOUS) | want);
         analog_mark_dirty(ki);
     }
-    /* 锚点随配置一起传：0xF4 之外显式写锚点的合法途径(值未变时 update-block 不磨损) */
+    /* 校准端点随配置一起传：0xF4 之外显式写校准端点的合法途径(值未变时 update-block 不磨损) */
     analog_set_top_reading(ki, c->raw_rest);
     analog_set_bottom_reading(ki, c->raw_full);
     return 0;
@@ -504,7 +503,7 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
             msg[5] = VIAL_ANALOG_MAX_READINGS;
             msg[6] = sizeof(vial_analog_wire_config_t);
             msg[7] = analog_get_bottom_out_mode() ? 1 : 0; /* 触底校准开关状态：GUI 重启后能对上(旧固件恒 0) */
-            /* 行程域满量程(小端)：GUI 据此对齐量程与推导字段宽度。编译期常量，只此分发一次。 */
+            /* 最大键程值(小端)：GUI 据此对齐量程与推导字段宽度。编译期常量，只此分发一次。 */
             msg[8] = (uint8_t)((uint16_t)ANALOG_MAX_TRAVEL & 0xFF);
             msg[9] = (uint8_t)((uint16_t)ANALOG_MAX_TRAVEL >> 8);
             break;
@@ -602,7 +601,7 @@ void vial_handle_cmd(uint8_t *msg, uint8_t length) {
                     break;
                 }
                 case VIAL_ANALOG_CAL_RESET:
-                    /* 恢复出厂锚点(非 0/255：锚点是原始 ADC 域物理量，0 会让模型失效到重开机) */
+                    /* 恢复默认校准值(非 0/255：校准端点是原始 ADC 域物理量，0 会让模型失效到重开机) */
                     for (uint16_t i = lo; i <= hi; i++) {
                         analog_set_top_reading(i, ANALOG_TOPREADING_MAX);
                         analog_set_bottom_reading(i, ANALOG_BOTTOMREADING_MIN);

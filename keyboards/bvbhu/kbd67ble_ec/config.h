@@ -75,16 +75,16 @@
 
 // *********************************************** Vial analog 出厂默认值 ***********************************************
 // 行程域：sw = (absv - top) * M / (bottom - top)，M = ANALOG_MAX_TRAVEL(见下)。absv 为原始 ADC 读数。
-// 核心钳位 top ≤ TOPREADING_MAX-8、bottom ≥ BOTTOMREADING_MIN+8；开机实测静置读数重写 top。
-#define ANALOG_TOPREADING_MAX 600         /* 静置锚点初值(开机实测覆盖；旧固件固定触发550可用，静置必低于它) */
-#define ANALOG_BOTTOMREADING_MIN 900      /* 触底锚点初值(可被校准推至1023) */
+// 核心钳位 top ≤ TOPREADING_MAX-8、bottom ≥ BOTTOMREADING_MIN+8；开机实测初始校准读数重写 top。
+#define ANALOG_TOPREADING_MAX 600         /* 初始校准读数：默认校准值，同时是 top 的钳位上界(开机实测覆盖；旧固件固定触发550可用，初始校准读数必低于它) */
+#define ANALOG_BOTTOMREADING_MIN 900      /* 触底校准读数：默认校准值，同时是 bottom 的钳位下界(可被校准推至1023) */
 #define ANALOG_DEFAULT_ACTUATION_THRESHOLD 3000  /* 触发行程(0..ANALOG_MAX_TRAVEL) */
-#define ANALOG_DEFAULT_RELEASE_THRESHOLD 1000    /* 释放行程(0..ANALOG_MAX_TRAVEL，与触发点相距 2000 = 半量程) */
-#define CALIBRATION_THRESHOLD 32               /* 实时校准：偏离锚点超过该ADC计数才更新 */
+#define ANALOG_DEFAULT_RELEASE_THRESHOLD 1000    /* 释放行程(0..ANALOG_MAX_TRAVEL，与触发点相距 2000 = 最大键程值的一半) */
+#define CALIBRATION_THRESHOLD 32               /* 实时校准：偏离校准端点超过该ADC计数才更新 */
 
-// 行程域满量程(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 EC 锚点跨度约 300-400 ADC 计数，
-// 但满量程取 4000 换取细粒度滑块(行程域与 ADC 计数无关，只是刻度密度)。
-// 满量程 >255 使行程域升 uint16：配置/记录/读数线格式随之从 12/8/3 变为 16/12/4 字节，
+// 最大键程值(0=顶部, M=触底)，经 0xF0 caps 发给 Vial。本板 EC 校准端点跨度约 300-400 ADC 计数，
+// 但最大键程值取 4000 换取细粒度滑块(行程域与 ADC 计数无关，只是刻度密度)。
+// 最大键程值 >255 使行程域升 uint16：配置/记录/读数线格式随之从 12/8/3 变为 16/12/4 字节，
 // 出厂阈值必须同步改小否则静态断言直接编译失败。
 #define ANALOG_MAX_TRAVEL 4000
 // *********************************************** Vial analog 出厂默认值 ***********************************************

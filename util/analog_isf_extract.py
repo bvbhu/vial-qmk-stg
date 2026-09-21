@@ -8,8 +8,8 @@ ANALOG_BOTTOMREADING_MIN/MAX、ANALOG_MAX_TRAVEL、ANALOG_ISF_IGNORE_BITS)
 都是 **C 预处理宏**，而且它们的值可以来自
 
   1. kb config.h     (显式 #define)
-  2. 本脚本的兜底：漂移区间外边(TOPREADING_MIN)未定义则取内边
-     (TOPREADING_MAX，即出厂静置锚点)；BOTTOMREADING_MAX 未定义则
+  2. 本脚本的兜底：校准端点区间外边(TOPREADING_MIN)未定义则取内边
+     (TOPREADING_MAX，即默认校准值)；BOTTOMREADING_MAX 未定义则
      由 ADC 量程推导
   3. quantum/analog/analog_core.h §6.5 的 #ifndef 兜底(IGNORE_BITS = 1)
 
@@ -117,7 +117,6 @@ def main():
     ap.add_argument("--emit-gen-cmd", action="store_true",
                     help="折叠完直接以子进程调用生成器(见 main 末尾的说明)")
     ap.add_argument("--gen", default=None, help="--emit-gen-cmd 时的生成器脚本路径")
-    ap.add_argument("--deadzone-max", default="20")
     ap.add_argument("--output", default=None, help="--emit-gen-cmd 时的产物路径")
     args = ap.parse_args()
 
@@ -138,15 +137,15 @@ def main():
             return v, "<defaults>"
         return default_expr, None
 
-    # 出厂锚点 = 漂移区间内边(analog_core.h §6)：必须由 kb config.h 定义
+    # 默认校准值 = 校准端点区间内边(analog_core.h §6)：必须由 kb config.h 定义
     # (core 在缺失时 #error)。本脚本同样要求二者都给到，否则报错。
     top_max_raw = resolve("ANALOG_TOPREADING_MAX")[0]
     bottom_min_raw = resolve("ANALOG_BOTTOMREADING_MIN")[0]
 
     if top_max_raw is None:
-        die("kb config.h 未定义 ANALOG_TOPREADING_MAX (出厂静置锚点)")
+        die("kb config.h 未定义 ANALOG_TOPREADING_MAX (默认校准值: 初始校准读数)")
     if bottom_min_raw is None:
-        die("kb config.h 未定义 ANALOG_BOTTOMREADING_MIN (出厂触底锚点)")
+        die("kb config.h 未定义 ANALOG_BOTTOMREADING_MIN (默认校准值: 触底校准读数)")
 
     # 兜底表达式(如 ANALOG_BOTTOMREADING_MAX 的 ADC 量程推导)里引用的名字
     # 必须在探针 TU 里可见，所以把解析到的整串**就地代换**进去，而不是原样抄名字。
@@ -176,7 +175,7 @@ def main():
 
     top_max = expand(top_max_raw, subst)
     bottom_min = expand(bottom_min_raw, subst)
-    # 漂移区间外边未定义则取内边(出厂锚点)，退化成零宽区间；
+    # 校准端点区间外边未定义则取内边(默认校准值)，退化成零宽区间；
     # 生成器已放宽支持 top_min == top_max。
     top_min = expand(resolve("ANALOG_TOPREADING_MIN", top_max)[0], subst)
     bottom_max = reading_max_expr
@@ -223,7 +222,6 @@ def main():
             "--bottom-max", str(values[FIELDS.index("ANALOG_BOTTOMREADING_MAX")]),
             "--max-travel", str(values[FIELDS.index("ANALOG_MAX_TRAVEL")]),
             "--ignore-bits", str(values[FIELDS.index("ANALOG_ISF_IGNORE_BITS")]),
-            "--deadzone-max", str(args.deadzone_max),
             "--output", args.output,
         ]
         # 生成器的进度/警告要能透到构建日志里，故 stdout/stderr 直通。

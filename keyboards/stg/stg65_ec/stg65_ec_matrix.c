@@ -24,7 +24,7 @@
 
 #include "quantum.h"
 #include "analog.h"              /* QMK ADC 驱动：adc_mux / pinToMux / adc_read */
-#include "analog/analog_core.h"  /* Vial analog 核心层：推模型状态机 + 持久化 */
+#include "analog/analog_core.h"  /* Vial analog 核心层：推送式状态机 + 持久化 */
 #include "matrix.h"
 #include "wait.h"
 #include "print.h"
@@ -148,7 +148,7 @@ void matrix_init_custom(void) {
     OPAMP_DISABLE();
 }
 
-/* 开机校准：采样各键静置读数(噪声基底)写入 top_reading。
+/* 开机校准：采样各键初始校准读数写入 top_reading。
  * bottom_reading 出厂默认 900，触底由实时校准推高并防抖落盘。 */
 void calibrate_matrix(void) {
     uint16_t accum[MATRIX_ROWS][MATRIX_COLS] = {{0}};
@@ -212,7 +212,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
                     continue;
                 }
 
-                /* 实时校准(顶部/触底读数)：读数持续偏离锚点才更新，防抖落盘在 analog_task */
+                /* 实时校准(顶部/触底读数)：读数持续偏离校准端点才更新，防抖落盘在 analog_task */
                 if ((int)absv < (int)ANALOG_TOP_READING(row, gcol) - CALIBRATION_THRESHOLD) {
                     analog_set_top_reading(ki, absv);
                 } else if ((int)absv > (int)ANALOG_BOTTOM_READING(row, gcol) + CALIBRATION_THRESHOLD) {
@@ -221,7 +221,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
 
                 last_absv[row][gcol] = absv;
 
-                /* 推模型：返回 true = 按下状态翻转，据此翻矩阵位 */
+                /* 推送式状态机：返回 true = 按下状态翻转，据此翻矩阵位 */
                 if (analog_step_key(ki, analog_model_sw(ki, absv))) {
                     updated = true;
                     if (analog_get_pressed(ki)) {
@@ -239,7 +239,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
 }
 
 /* bootmagic：analog_init 尚未执行，但 matrix_init_custom 里的 dummy adc_read
- * 已确保 ADC 驱动启动，可直读 EC。Esc(0,0) 深按(读数显著高于静置锚点)进 bootloader。
+ * 已确保 ADC 驱动启动，可直读 EC。Esc(0,0) 深按(读数显著高于初始校准读数)进 bootloader。
  * 覆盖 quantum/bootmagic.c 的 weak 默认实现(默认扫数字矩阵，EC 矩阵测不到键)。 */
 void bootmagic_scan(void) {
     /* EC 矩阵需先初始化引脚/ADC/运放(bootmagic 可能在 matrix_init 之前运行) */

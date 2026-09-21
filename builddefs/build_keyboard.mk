@@ -523,9 +523,6 @@ endif
 ANALOG_ISF_TABLE := $(INTERMEDIATE_OUTPUT)/src/analog_isf_table.inc
 ANALOG_ISF_EXTRACT := util/analog_isf_extract.py
 ANALOG_ISF_GEN := util/analog_isf_gen.py
-# 死区上界：生成器挑 SCALE 的硬约束，非板相关，做成 make 变量供 rules.mk 覆盖。
-# 20 为生成器默认值，>=20 后形状误差不再下降。
-ANALOG_ISF_DEADZONE_MAX ?= 20
 # 兜底头文件：提供 ANALOG_ISF_* 等 #ifndef 默认(见 analog_core.h §6.5)。
 ANALOG_ISF_DEFAULTS_H := $(QUANTUM_DIR)/analog/analog_core.h
 ANALOG_ISF_WORKDIR := $(INTERMEDIATE_OUTPUT)/analog_isf
@@ -540,7 +537,7 @@ ANALOG_ISF_EXTRACT_ARGS = --cc "$(ANALOG_ISF_CC)" --workdir $(ANALOG_ISF_WORKDIR
 	$(foreach h,$(CONFIG_H) $(POST_CONFIG_H),--config-h $(h)) \
 	$(foreach h,$(ANALOG_ISF_DEFAULTS_H),--defaults-h $(h))
 
-# 依赖：两脚本 + config.h 链 + 兜底头 + 可能覆盖 DEADZONE 的 rules.mk。
+# 依赖：两脚本 + config.h 链 + 兜底头 + rules.mk(声明 ANALOG_MODEL 等)。
 # 用 `=` 延后展开 $(CONFIG_H)。
 ANALOG_ISF_DEPS = $(ANALOG_ISF_GEN) $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_DEFAULTS_H) $(CONFIG_H) $(POST_CONFIG_H) \
 	$(wildcard $(KEYBOARD_PATH_1)/rules.mk) $(wildcard $(KEYBOARD_PATH_1)/post_rules.mk) \
@@ -548,7 +545,7 @@ ANALOG_ISF_DEPS = $(ANALOG_ISF_GEN) $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_DEFAULTS_
 
 $(ANALOG_ISF_TABLE): $(ANALOG_ISF_DEPS)
 	@$(SILENT) || printf "$(MSG_GENERATING) $@" | $(AWK_CMD)
-	$(eval CMD=python3 $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_EXTRACT_ARGS) --emit-gen-cmd --gen $(ANALOG_ISF_GEN) --deadzone-max $(ANALOG_ISF_DEADZONE_MAX) --output $@)
+	$(eval CMD=python3 $(ANALOG_ISF_EXTRACT) $(ANALOG_ISF_EXTRACT_ARGS) --emit-gen-cmd --gen $(ANALOG_ISF_GEN) --output $@)
 	@$(BUILD_CMD)
 
 # ISF模型才编译 

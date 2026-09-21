@@ -9,7 +9,7 @@
 void keyboard_post_init_kb(void);
 
 // tl96mgf072_matrix.c
-void calibrate_matrix(void); // 开机校准：采样各键静置读数(top_reading)；触底锚点走持久化
+void calibrate_matrix(void); // 开机校准：采样各键初始校准读数(top_reading)；触底校准读数走持久化
 void matrix_init(void);
 uint8_t matrix_scan(void);
 matrix_row_t matrix_get_row(uint8_t row);
