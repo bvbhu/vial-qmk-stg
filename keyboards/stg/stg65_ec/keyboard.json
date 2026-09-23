@@ -4,8 +4,8 @@
     "processor": "STM32F411",
     "bootloader": "stm32-dfu",
     "usb": {
-        "vid": "0x6501",
-        "pid": "0x6829",
+        "vid": "0x6829",
+        "pid": "0x6501",
         "device_version": "0.0.1"
     },
     "features": {
