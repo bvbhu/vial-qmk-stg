@@ -9,14 +9,12 @@ void adcSTM32EnableTSVREFE(void);
 
 /* ============================================================================
  *  BHQ 桥接串口: USART2 @ 128000bps
- *    STM32 PA2 (TX) -> 桥 PB4 (RX)
- *    STM32 PA3 (RX) <- 桥 PB7 (TX)
+ *    STM32 PA2 (TX) -> 桥 PA8 (RX)
+ *    STM32 PA3 (RX) <- 桥 PA9 (TX)
  *
  *  ⚠️ TX 与 RX 的引脚模式必须不同 (F1 GPIOv1):
  *    TX: PAL_MODE_STM32_ALTERNATE_PUSHPULL (复用推挽)
  *    RX: PAL_MODE_INPUT (浮空输入)
- *  RX 曾误写成 ALTERNATE_PUSHPULL, 把 PA3 变成低阻抗输出与桥 PB7 对顶,
- *  钳死整条下行线, 表现为"上行通、下行全死"。
  *  不要照抄裸值 7(那是 GPIOv2 的 AF7), F1 上无效。
  * ========================================================================= */
 #define UART_DRIVER SD2

@@ -40,3 +40,19 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] =
 	)
 };
 
+/* ---- 矩阵扫描率观测 ----
+ * 每 10 秒打印一次核心维护的扫描率：get_matrix_scan_rate() 返回上一个 1 秒
+ * 窗口内的扫描次数，即 scans/s。依赖 config.h 的 DEBUG_MATRIX_SCAN_RATE。
+ * 必须用 uprintf：Vial 构建强制 -DNO_DEBUG，dprintf 会被编译期删除。 */
+void housekeeping_task_user(void)
+{
+    static uint32_t last_ms = 0;
+
+    const uint32_t now = timer_read32();
+    if (TIMER_DIFF_32(now, last_ms) >= 10000)
+    {
+        last_ms = now;
+        uprintf("matrix scan rate: %lu/s\n", (unsigned long)get_matrix_scan_rate());
+    }
+}
+

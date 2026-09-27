@@ -213,109 +213,13 @@ void keyboard_post_init_kb(void) {
     keyboard_post_init_user(); /* 透传用户钩子 */
 }
 
-/* ============================================================================
- *  开机自动进入蓝牙模式
- *
- *  问题: kb_common 的 transport.c 上电默认 KB_TRANSPORT_USB, 而本板电池供电
- *  (无 USB)时上电后所有按键都发向不存在的 USB —— 必须按一次 BT1 才切到蓝牙;
- *  同时 QMK 上电不发任何 0x14 广播命令, 桥(设计上广播完全由 QMK 控制)便不开
- *  广播, Windows 想自动回连也找不到设备。两个因素叠加 = "断电重启后必须按
- *  BT1 才能回连"。
- *
- *  方案: 上电 TL12_BT_BOOT_DELAY_MS 后, 若未插 USB 且用户仍未选择通道,
- *  自动切 BT1 并打开 30s 非配对广播(绑定过的 Windows 会静默自动回连,
- *  不会触发重新配对)。默认transport 仍是 USB, 插 USB 的场景不受影响。
- * ========================================================================= */
-#ifndef TL12_BT_BOOT_DELAY_MS
-#    define TL12_BT_BOOT_DELAY_MS 800 /* 等桥上电就绪(桥启动约需数百 ms) */
-#endif
-#ifndef TL12_BT_BOOT_RETRY_COUNT
-#    define TL12_BT_BOOT_RETRY_COUNT 6 /* 0x14 广播帧重发次数 */
-#endif
-#ifndef TL12_BT_BOOT_RETRY_INTERVAL_MS
-#    define TL12_BT_BOOT_RETRY_INTERVAL_MS 600 /* 重发间隔 */
-#endif
 
-static void tl12_bt_boot_task(void) {
-    /* 广播帧重试: 桥上电需要数百 ms 就绪 UART, 单发一次会偶尔落在就绪窗口
-     * 之前被丢(实测: 同一固件有时自动回连、有时必须按键)。这里按
-     * TL12_BT_BOOT_RETRY_INTERVAL_MS 间隔重发, 收到桥的"已连接/已广播"
-     * 状态帧(wt_state 离开 DISCONNECTED/INITIALIZED)后停止。 */
-    static uint8_t  tries    = 0;
-    static uint32_t last_try = 0;
-    static bool     boot_done = false;
-
-    if (boot_done) {
-        return;
-    }
-
-    if (tries == 0) {
-        if (timer_read32() < TL12_BT_BOOT_DELAY_MS) {
-            return;
-        }
-    } else if (timer_elapsed32(last_try) < TL12_BT_BOOT_RETRY_INTERVAL_MS) {
-        return;
-    }
-
-    /* 桥已回状态(连接或广播中) -> 广播帧已被处理, 停止重试 */
-    if (tries > 0 &&
-        (wireless_get() == WT_STATE_CONNECTED ||
-         wireless_get() == WT_STATE_ADV_UNPAIRED ||
-         wireless_get() == WT_STATE_ADV_PAIRING)) {
-        boot_done = true;
-        return;
-    }
-
-    /* 重试上限后放弃(桥可能真没接/没上电), 交给按键兜底逻辑 */
-    if (tries >= TL12_BT_BOOT_RETRY_COUNT) {
-        boot_done = true;
-        return;
-    }
-
-    /* 插着 USB 就保持 USB 模式, 交给用户手动切换。
-     * 但要**显式告知桥关闭广播**: 桥侧有"已绑定未连接即自主广播"的兜底
-     * (HOGP 规范行为), 有线使用时不能让它在旁边一直广播 —— Windows 会
-     * 自动回连, 白耗电且状态错乱。这里的 CLOSE 同样按重试节奏重发,
-     * 避免落在桥 UART 就绪窗口之前被丢。 */
-    if (usb_power_connected()) {
-        last_try = timer_read32();
-        bhq_CloseBleAdvertising();
-        tries++;
-        if (tries >= TL12_BT_BOOT_RETRY_COUNT) {
-            boot_done = true;
-        }
-        return;
-    }
-    /* 用户已在启动后主动选过通道(如按键切换)则不覆盖。
-     * 注意: 判据是"transport 不再是 BLUETOOTH_1"而不是"不再是 USB"——
-     * 第一次发送后 transport 已被本任务设为 BLUETOOTH_1, 若按旧判据
-     * (!= USB) 则重试首轮即退出, 退化回单发(实测广播帧全丢的根因)。 */
-    if (tries > 0 && transport_get() != KB_TRANSPORT_BLUETOOTH_1) {
-        boot_done = true;
-        return;
-    }
-
-    last_try = timer_read32();
-    transport_set(KB_TRANSPORT_BLUETOOTH_1);
-    bhq_OpenBleAdvertising(0, 30); /* host 0, 30s 非配对广播 */
-    tries++;
-}
 
 void housekeeping_task_kb(void) {
 #if defined(BLUETOOTH_BHQ)
-    tl12_bt_boot_task(); /* 上电自动进蓝牙模式(一次性) */
     bhq_wireless_task(); /* 多主机切换 + 电池 */
 #    if defined(KB_LPM_ENABLED)
-    /* 有线(USB)模式不休眠。
-     *
-     * 背景: kb_common 的 lpm_sleep_prepare() 只看 usb_power_connected(),
-     * 而那需要 USB_POWER_SENSE_PIN(A6) 上的 5V 分压 (5V --100K-- A6 --100K-- GND)。
-     * 本板未做该分压时 A6 悬空, 会被恒判为"未插 USB", 于是有线时也进 STOP。
-     * 因此这里再叠一层传输模式判断: 只要当前在 USB 通道, 就不允许休眠。
-     * 两个条件任一成立即不休眠 —— 更保险, 且不改变共用框架的其他键盘行为。 */
-    if (!IS_USB_TRANSPORT(transport_get()) && !usb_power_connected()) {
-        lpm_task(); /* 低功耗休眠 */
-    }
+    lpm_task(); /* 低功耗休眠; USB 供电时由 lpm_task() 内部自行跳过 */
 #    endif
     tl12_config_task(); /* 0x11 配置下发(延迟 + 重试) */
 #endif

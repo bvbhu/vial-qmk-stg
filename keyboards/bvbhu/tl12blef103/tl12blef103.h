@@ -27,7 +27,7 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record);
  *    ROW: A9, B15
  *    COL: B12, B14, B5, A8, A10, B13
  *  WS2812 数据线: B6
- *  BHQ 串口: TX=A2(→桥 PB4), RX=A3(←桥 PB7)
+ *  BHQ 串口: TX=A2(→桥 PA8), RX=A3(←桥 PA9)
  *
  *  COL2ROW 含义: 电流从 ROW 流向 COL。ROW 是**驱动**端(逐行拉低扫描),
  *  COL 是**读入**端(带上拉)。二极管方向: 阳极朝 ROW、阴极朝 COL。

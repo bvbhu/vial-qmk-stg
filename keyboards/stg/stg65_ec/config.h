@@ -47,7 +47,7 @@
 
 // mux的set脚
 #define AMUX_SEL_PINS \
-    { B3, A15, A14 }
+    { B4, B3, A15 }
 
 // 每个AMUX的列数
 #define AMUX_COL_CHANNELS_SIZES \
