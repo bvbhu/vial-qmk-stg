@@ -27,6 +27,7 @@ endif
 #
 # kb 只需在 rules.mk 声明 ANALOG_MODEL = <name>，即启用整个模拟子系统：
 #   isf         平方反比-快速(磁轴)，构建期另生成查表常量(见 build_keyboard.mk)
+#   keychron    Keychron HE 三次多项式(直接定点，无查表、无构建期生成)
 #   linear_fast 线性(乘+移替代除法)
 #   linear      线性(纯除法，EC 兜底)
 # 编入 analog_core.c + 对应 analog_model_<name>.c；-DANALOG_MODEL(无值宏)供

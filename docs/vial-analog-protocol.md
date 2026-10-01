@@ -494,6 +494,31 @@ int16_t  analog_backend_get_raw_adc(uint16_t ki);
     对 `d` 单独做数值钳位。**无效读数保留上一次的校准值**，不清零——
     清零会让该键退化成恒定输出；
   - 派生参数类型（`isf_scalar_t`）由生成器按最坏评估采样点 `D/K` 量级选择：`int16_t` / `int32_t`。
+- `ANALOG_MODEL = keychron` → 编入 `analog_model_keychron.c`
+  （Keychron HE 三次多项式，直接定点、无查表；曲线形状由固定的三次
+  `P(x) = A + Bx + Cx² + Dx³` 决定——`Top`/`Bottom` 只决定零点与尺度，
+  与 ISF 的"同时决定形状"本质不同）
+  - 归一化：`sw = M·Q(y)/Q(bottom−top)`，`y = adc − top`，
+    `Q(y) = P(ZR − y) − P(ZR)`、`ZR = 3121`、
+    `A = 426.88962`、`B = −0.48358`、`C = 2.04637e-4`、`D = −2.99368e-8`；
+    边界严格 `F(top)=0`、`F(bottom)=M`；
+  - 方向说明：Keychron 原始 ADC 是"松开高、按下低"（`zero > full`），映射用
+    多项式 3121 **左侧**的段（`x = 3121 − y`）；本仓库坐标 `Top < Bottom`（按下
+    读数增大），故曲线镜像后用 `y = adc − top` 复刻同一段。这是"归一化适配"
+    （原代码内部 0..240 travel 归一化到 0..M），不是逐行复刻；
+  - 展开（对三次多项式 Taylor 精确）：`Q(y) = c1·y + c2·y² + c3·y³`，
+    `c1 = −P'(ZR) ≈ 0.0810467`、`c2 = P''(ZR)/2 ≈ −7.566e-5`（**负**）、
+    `c3 = −D = 2.99368e-8`；参考点 `Q(1181) = P(1940)−P(3121) ≈ 39.4991`
+    与 Keychron 原始 `Scale = 40/39.4991` 吻合。每键派生参数只有
+    `scale[ki] = round(M·2^12 / Q(bottom−top))`，校准回调重算；
+  - 热路径定点：按 `y ≤ 4095`（12 位 ADC 量程）分三段移位累加得
+    `q7 = Q(y)·2^7`，再 `(q7·scale + 2^18) >> 19`；二次项为负，中间量
+    用 `int32`（宽行程域末段乘法升 `uint64`）；
+  - 跨度约束：窄行程域 `scale` 是 `uint16`，要求校准跨度
+    `bottom − top ≥ 250`（否则 `scale` 溢出承载类型，校准回调拒绝并保留旧值），
+    出厂默认跨度也由静态断言编译期把关；
+  - 精度（跨度 350..650 参考配置）：最坏曲线误差 ≈ 1.0 行程单位，
+    其中 ≤0.5 是整数输出固有舍入，典型 < 0.3。
 - `ANALOG_MODEL = linear_fast` → 编入 `analog_model_linear_fast.c`
   （线性，与 `linear` 同曲线；校准时预算 8.8 定点倒数乘子 K[ki]，扫描里用
   "乘法+移位"替代 32 位除法，Cortex-M0 上省掉一次软除法。精度 ≤1 LSB。）
@@ -511,7 +536,7 @@ int16_t  analog_backend_get_raw_adc(uint16_t ki);
 
 ## 5. kb 接入清单
 
-1. `rules.mk`：`ANALOG_MODEL = <name>`（启用本扩展与核心层；name 取 `isf`/`linear_fast`/`linear`）。
+1. `rules.mk`：`ANALOG_MODEL = <name>`（启用本扩展与核心层；name 取 `isf`/`keychron`/`linear_fast`/`linear`）。
    它同时派生上游 `ANALOG_DRIVER_REQUIRED`，让 QMK 编入平台 ADC 驱动（`adc_read`/`pinToMux`）。
 2. `config.h`：定义 `ANALOG_TOPREADING_MAX`/`ANALOG_BOTTOMREADING_MIN`（默认校准值，即出厂静置/触底校准端点，
    必需）；`ANALOG_MAX_TRAVEL`（最大键程值，见 §1.5）。ISF 还可给校准端点区间
