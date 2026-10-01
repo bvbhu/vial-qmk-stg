@@ -6,7 +6,11 @@
  *   [0,0] [0,1] [0,2] [0,3] [0,4] [0,5]
  *   [1,0] [1,1] [1,2] [1,3] [1,4] [1,5]
  *
- * Layer 0 直接放蓝牙测试键, 其余键为可见输出键, 方便逐键验证上报。
+ * Layer 0 (主层): A-E 为输出键, 空格 / 回车为 MO(1) —— 按下 (按住) 即切到
+ *                 Layer 1 (功能层), 松开回到本层。
+ * Layer 1 (功能层): 有线 USB_TOG / 蓝牙 BLE_SW1..3 / 2.4G RF_TOG /
+ *                 NKRO 切换 NK_TOGG, 全部集中在此层; A-E 与空格位沿
+ *                 KC_TRNS 下落透传到 Layer 0。
  */
 #include QMK_KEYBOARD_H
 
@@ -18,14 +22,15 @@
 #include "report_buffer.h"
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
-    /* USB Host / BT1 / BT2 / BT3 / 电量 / 2.4G Host / A B C D E 空格 */
+    /* 主层: 12 键 = 11 个字母 A-K + 空格位 [1,5]=MO(1) (按住切 Layer 1) */
     [0] = LAYOUT(
-        USB_TOG, BLE_SW1, BLE_SW2, BLE_SW3, BAT_INFO, RF_TOG,
-        KC_A,    KC_B,    KC_C,    KC_D,    KC_E,     KC_SPACE
+        KC_A,    KC_B,    KC_C,    KC_D,    KC_E,    KC_F,
+        KC_G,    KC_H,    KC_I,    KC_J,    KC_K,    MO(1)
     ),
 
+    /* 功能层: 有线 / 蓝牙 3 槽 / 2.4G / NKRO 切换 */
     [1] = LAYOUT(
-        KC_F1, KC_F2, KC_F3, KC_F4, KC_F5, KC_F6,
-        KC_F7, KC_F8, KC_F9, KC_F10, KC_F11, KC_F12
+        USB_TOG, BLE_SW1, BLE_SW2, BLE_SW3, RF_TOG, NK_TOGG,
+        KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS
     ),
 };
