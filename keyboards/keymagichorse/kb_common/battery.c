@@ -84,6 +84,18 @@ static void battery_percent_debounce_reset(void) {
 
 /* ===================== 公共：读取电池电压 ===================== */
 
+// 打开内部 VREFINT 采样通道（供 battery_read_mv / battery_init 使用）
+// 各系列该位的打开方式不同：
+//   STM32F0（ADCv1 LLD）：adcSTM32EnableVREF() / ADC->CCR.VREFEN
+//   STM32F1/F4（ADCv2 LLD）：adcSTM32EnableTSVREFE()（ADCv1 里没有这个函数）
+static inline void battery_vrefint_enable(void) {
+#if defined(STM32F0XX)
+    adcSTM32EnableVREF(&ADCD1);
+#else
+    adcSTM32EnableTSVREFE();
+#endif
+}
+
 // 读取电池电压 (mV)，通过 VREFINT 动态校准 VDDA
 // 返回电池电压 (mV)，读取失败返回 0
 static uint16_t battery_read_mv(void) {
@@ -100,7 +112,7 @@ static uint16_t battery_read_mv(void) {
     }
 
     // 读取 VREFINT
-    adcSTM32EnableTSVREFE();
+    battery_vrefint_enable();
     adc_mux vrefint_mux = TO_MUX(BATTERY_VREFINT_CHANNEL, 0);
     int16_t vrefint_adc = adc_read(vrefint_mux);
 
@@ -224,7 +236,7 @@ void battery_init(void) {
     battery_percent_debounce_reset();
     battery_low_voltage      = false;
     battery_low_count       = 0;
-    adcSTM32EnableTSVREFE();
+    battery_vrefint_enable();
 }
 
 void battery_reset_timer(void) {

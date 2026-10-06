@@ -42,6 +42,8 @@
 #    include "lpm_chip_stm32f4.h"
 #elif defined(LPM_CHIP_STM32F1)
 #    include "lpm_chip_stm32f1.h"
+#elif defined(LPM_CHIP_STM32F0)
+#    include "lpm_chip_stm32f0.h"
 #elif defined(LPM_CHIP_AT32)
 #    include "lpm_chip_at32f4.h"
 #else

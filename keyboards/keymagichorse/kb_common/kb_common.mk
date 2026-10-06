@@ -75,6 +75,9 @@ ifeq ($(strip $(BLUETOOTH_DRIVER)), bhq)
         ifneq (,$(findstring stm32f1,$(KB_LPM_DRIVER)))
             OPT_DEFS += -DLPM_CHIP_STM32F1
         endif
+        ifneq (,$(findstring stm32f0,$(KB_LPM_DRIVER)))
+            OPT_DEFS += -DLPM_CHIP_STM32F0
+        endif
         ifneq (,$(findstring at32,$(KB_LPM_DRIVER)))
             OPT_DEFS += -DLPM_CHIP_AT32
         endif

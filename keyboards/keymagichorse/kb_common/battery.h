@@ -52,22 +52,30 @@
 // 消除 LDO dropout 导致 VDDA 偏离 3.3V 时的 ADC 误差。
 // STM32F4xx: VREFINT 通道为 17，标称 1.21V
 // STM32F1xx: VREFINT 通道为 17，标称 1.20V
-#if !defined(BATTERY_USE_VREFINT) && (defined(STM32F4XX) || defined(STM32F1XX))
+// STM32F0xx: VREFINT 通道为 17，标称 1.22V
+#if !defined(BATTERY_USE_VREFINT) && (defined(STM32F4XX) || defined(STM32F1XX) || defined(STM32F0XX))
 #    define BATTERY_USE_VREFINT
 #endif
 
-// VREFINT 标称电压 (mV)，STM32F4xx=1210, STM32F1xx=1200
+// VREFINT 标称电压 (mV)，STM32F4xx=1210, STM32F1xx=1200, STM32F0xx=1224
 #ifndef BATTERY_VREFINT_MV
 #    ifdef STM32F4XX
 #        define BATTERY_VREFINT_MV    1210
+#    elif defined(STM32F0XX)
+#        define BATTERY_VREFINT_MV    1224
 #    else
 #        define BATTERY_VREFINT_MV    1200
 #    endif
 #endif
 
 // VREFINT 通道号
+// F0 走 ADCv1 LLD，那里没有 ADC_CHANNEL_VREFINT 宏，直接用通道号 17（ADC_IN17）
 #ifndef BATTERY_VREFINT_CHANNEL
-#    define BATTERY_VREFINT_CHANNEL  ADC_CHANNEL_VREFINT
+#    if defined(STM32F0XX)
+#        define BATTERY_VREFINT_CHANNEL  17
+#    else
+#        define BATTERY_VREFINT_CHANNEL  ADC_CHANNEL_VREFINT
+#    endif
 #endif
 
 // ADC 满量程值 (10bit=1023, 12bit=4095)
