@@ -1,0 +1,39 @@
+{
+    "keyboard_name": "N32H481 Test",
+    "manufacturer": "Talo",
+    "maintainer": "Talo",
+    "processor": "N32H481RE",
+    "bootloader": "custom",
+    "usb": {
+        "vid": "0x544C",
+        "pid": "0x4810",
+        "device_version": "1.0.0"
+    },
+    "matrix_pins": {
+        "rows": ["B6"],
+        "cols": ["B5"]
+    },
+    "diode_direction": "COL2ROW",
+    "build": {
+        "lto": false
+    },
+    "features": {
+        "audio": false,
+        "backlight": false,
+        "bootmagic": false,
+        "command": false,
+        "console": true,
+        "extrakey": true,
+        "mousekey": false,
+        "nkro": false,
+        "rgblight": false,
+        "rgb_matrix": false
+    },
+    "layouts": {
+        "LAYOUT": {
+            "layout": [
+                {"matrix": [0, 0], "x": 0, "y": 0}
+            ]
+        }
+    }
+}
