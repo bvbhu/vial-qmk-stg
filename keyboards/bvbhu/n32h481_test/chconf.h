@@ -16,7 +16,7 @@
 
 #pragma once
 
-// The N32H49x SYSTICK driver supports only OSAL_ST_MODE_PERIODIC.
+// The N32H48x SYSTICK driver supports only OSAL_ST_MODE_PERIODIC.
 // Forcing CH_CFG_ST_TIMEDELTA to 0 selects PERIODIC mode in the OSAL
 // (see lib/chibios/os/hal/osal/rt-nil/osal.h). QMK does not use the
 // free-running alarm feature, so PERIODIC is safe here.

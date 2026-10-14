@@ -891,7 +891,7 @@ ifneq ($(findstring N32H481RE, $(MCU)),)
   #   OR
   #   <chibios[-contrib]>/os/hal/ports/$(MCU_FAMILY)/$(MCU_SERIES)
   MCU_FAMILY = N32
-  MCU_SERIES = N32H49x
+  MCU_SERIES = N32H48x
 
   # Linker script to use
   # - it should exist either in <chibios>/os/common/startup/ARMCMx/compilers/GCC/ld/
@@ -900,7 +900,7 @@ ifneq ($(findstring N32H481RE, $(MCU)),)
 
   # Startup code to use
   #  - it should exist in <chibios>/os/common/startup/ARMCMx/compilers/GCC/mk/
-  MCU_STARTUP ?= n32h49x
+  MCU_STARTUP ?= n32h48x
 
   # Board: it should exist either in <chibios>/os/hal/boards/,
   # <keyboard_dir>/boards/, or drivers/boards/

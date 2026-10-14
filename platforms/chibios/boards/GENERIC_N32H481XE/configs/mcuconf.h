@@ -19,7 +19,7 @@
 #define MCUCONF_H
 
 /*
- * N32H49x drivers configuration.
+ * N32H48x drivers configuration.
  * The following settings override the default settings present in
  * the various device driver implementation headers.
  * Note that the settings for each driver only have effect if the whole
@@ -32,7 +32,7 @@
  * 0...3        Lowest...Highest.
  */
 
-#define N32H49x_MCUCONF
+#define N32H48x_MCUCONF
 
 /*
  * General settings.
