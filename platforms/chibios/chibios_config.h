@@ -157,6 +157,15 @@
 #    endif
 #endif
 
+// N32 compatibility
+#if defined(MCU_N32)
+#    define CPU_CLOCK N32_SYSCLK
+
+#    if defined(N32H481RE)
+#        define USE_GPIOV1
+#    endif
+#endif
+
 #if defined(GD32VF103)
 /* This chip has the same API as STM32F103, but uses different names for literally the same thing.
  * As of 4.7.2021 QMK is tailored to use STM32 defines/names, for compatibility sake

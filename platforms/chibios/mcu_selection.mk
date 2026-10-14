@@ -878,6 +878,37 @@ ifneq ($(findstring AT32F415, $(MCU)),)
   AT32_BOOTLOADER_ADDRESS ?= 0x1FFFAC00
 endif
 
+ifneq ($(findstring N32H481RE, $(MCU)),)
+  # Cortex version
+  MCU = cortex-m4
+
+  # ARM version, CORTEX-M0/M1 are 6, CORTEX-M3/M4/M7 are 7
+  ARMV = 7
+
+  ## chip/board settings
+  # - the next two should match the directories in
+  #   <chibios[-contrib]>/os/hal/ports/$(MCU_PORT_NAME)/$(MCU_SERIES)
+  #   OR
+  #   <chibios[-contrib]>/os/hal/ports/$(MCU_FAMILY)/$(MCU_SERIES)
+  MCU_FAMILY = N32
+  MCU_SERIES = N32H49x
+
+  # Linker script to use
+  # - it should exist either in <chibios>/os/common/startup/ARMCMx/compilers/GCC/ld/
+  #   or <keyboard_dir>/ld/
+  MCU_LDSCRIPT ?= N32H481RE
+
+  # Startup code to use
+  #  - it should exist in <chibios>/os/common/startup/ARMCMx/compilers/GCC/mk/
+  MCU_STARTUP ?= n32h49x
+
+  # Board: it should exist either in <chibios>/os/hal/boards/,
+  # <keyboard_dir>/boards/, or drivers/boards/
+  BOARD ?= GENERIC_N32H481XE
+
+  USE_FPU ?= yes
+endif
+
 ifneq ($(findstring GD32VF103, $(MCU)),)
   # RISC-V
   MCU = risc-v
