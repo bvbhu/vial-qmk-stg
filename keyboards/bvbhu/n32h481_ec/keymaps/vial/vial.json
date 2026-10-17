@@ -1,7 +1,7 @@
 {
     "name": "STG65_EC",
-    "vendorId": "0x6829",
-    "productId": "0x6501",
+    "vendorId": "0x544C",
+    "productId": "0x4811",
     "lighting": "none",
     "matrix": {"rows": 5, "cols": 16},
     "layouts": {

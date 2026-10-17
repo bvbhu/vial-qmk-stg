@@ -15,8 +15,9 @@
  */
 #pragma once
 
-// N32 使用 transient EEPROM(内存模拟),容量按动态 keymap + Vial 需求放大
-#define TRANSIENT_EEPROM_SIZE 2048
+// EEPROM: 片内 Flash 双页镜像驱动(drivers/eeprom/eeprom_custom.c),
+// 使用 Flash 末尾 16KB(0x0807C000),断电保持;EEPROM_SIZE 供动态 keymap 分区
+#define EEPROM_SIZE 2048
 
 // *********************************************** EC 静电容矩阵 ***********************************************
 

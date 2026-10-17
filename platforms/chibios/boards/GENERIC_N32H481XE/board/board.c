@@ -17,6 +17,11 @@
 
 #include "hal.h"
 
+/* N32 AFIO SWJ-disable value = AFIO_RMP_CFG_SWJ_CFG_2 | 0x80000000
+   (the 0x80000000 mark bit is defined as GPIO_RMP_SWJ_MARK in the SDK
+   std-periph gpio driver, not in the CMSIS device header). */
+#define N32_GPIO_RMP_SWJ_DISABLE (AFIO_RMP_CFG_SWJ_CFG_2 | 0x80000000U)
+
 /*===========================================================================*/
 /* Driver local definitions.                                                 */
 /*===========================================================================*/
@@ -77,4 +82,14 @@ void __early_init(void) {
  * @note    You can add your board-specific code here.
  */
 void boardInit(void) {
+  /* N32H481 enables SWD/JTAG debug functions after reset, which binds
+     PA13 (SWDIO), PA15, PB3 and PB4 to the debug interface. The EC matrix
+     and the mux selector lines use these pins as GPIO, so release them:
+     set AFIO_RMP_CFG.SWJ_CFG = GPIO_RMP_SWJ_DISABLE
+     (AFIO_RMP_CFG_SWJ_CFG_2 | GPIO_RMP_SWJ_MARK).
+     NOTE: this also disables SWD debugging after boot. To re-enable SWD,
+     hold the chip in reset with PA13 low / use the ROM bootloader to reflash,
+     or clear the SWJ_CFG bits via the system memory bootloader. */
+  RCC->APB2PCLKEN |= RCC_APB2PCLKEN_AFIOEN;
+  AFIO->RMP_CFG |= N32_GPIO_RMP_SWJ_DISABLE;
 }
