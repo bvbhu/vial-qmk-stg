@@ -82,14 +82,12 @@ void __early_init(void) {
  * @note    You can add your board-specific code here.
  */
 void boardInit(void) {
-  /* N32H481 enables SWD/JTAG debug functions after reset, which binds
-     PA13 (SWDIO), PA15, PB3 and PB4 to the debug interface. The EC matrix
-     and the mux selector lines use these pins as GPIO, so release them:
-     set AFIO_RMP_CFG.SWJ_CFG = GPIO_RMP_SWJ_DISABLE
-     (AFIO_RMP_CFG_SWJ_CFG_2 | GPIO_RMP_SWJ_MARK).
-     NOTE: this also disables SWD debugging after boot. To re-enable SWD,
-     hold the chip in reset with PA13 low / use the ROM bootloader to reflash,
-     or clear the SWJ_CFG bits via the system memory bootloader. */
-  RCC->APB2PCLKEN |= RCC_APB2PCLKEN_AFIOEN;
-  AFIO->RMP_CFG |= N32_GPIO_RMP_SWJ_DISABLE;
+  /* SWD/JTAG debug interface is deliberately LEFT ENABLED here.
+     N32H481 binds PA13/PA14/PA15/PB3/PB4 to the debug interface after
+     reset; a keyboard that needs those pins as GPIO (e.g. n32h481_ec uses
+     A13 as a matrix row and A15/B3/B4 as mux selectors) must release them
+     in its OWN init code (set AFIO_RMP_CFG.SWJ_CFG to SWJ_SWD to keep SWD,
+     or SWJ_DISABLE if it gives up debugging), not in this generic board.
+     Disabling SWJ here made every firmware on this board lose SWD after
+     boot -- the J-Link could no longer connect or reflash the chip. */
 }

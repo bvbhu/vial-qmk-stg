@@ -164,6 +164,15 @@ static void stg_config_task(void) {
 #endif /* BLUETOOTH_BHQ */
 
 void board_init(void) {
+  /* Release the SWJ debug pins (PA13 SWDIO / PA15 JTDI / PB3 JTDO /
+     PB4 NJTRST) so they can be used as EC matrix row / mux selectors.
+     The EC keyboard needs all four, so it fully disables the debug
+     interface here (SWJ_DISABLE), NOT in the GENERIC board -- every other
+     keyboard on this MCU keeps SWD for flashing/debugging.
+     NOTE: once booted, SWD is gone on this keyboard; re-flash via the
+     ROM bootloader (BOOT0 = H5 pin 9 high) or J-Link while held in reset. */
+  RCC->APB2PCLKEN |= RCC_APB2PCLKEN_AFIOEN;
+  AFIO->RMP_CFG |= (AFIO_RMP_CFG_SWJ_CFG_2 | 0x80000000U); /* SWJ_DISABLE */
 #if defined(BLUETOOTH_BHQ)
 #   if defined(KB_LPM_ENABLED)
     lpm_init();
