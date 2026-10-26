@@ -1,0 +1,17 @@
+{
+    "name": "N32H481_DEMO",
+    "vendorId": "0x544C",
+    "productId": "0x4813",
+    "lighting": "none",
+    "matrix": {"rows": 1, "cols": 2},
+    "layouts": {
+        "keymap": [
+            [
+                {"x": 0, "w": 1},
+                "0,0",
+                {"x": 0.5, "w": 1},
+                "0,1"
+            ]
+        ]
+    }
+}

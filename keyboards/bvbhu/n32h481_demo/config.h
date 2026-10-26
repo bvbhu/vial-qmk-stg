@@ -1,4 +1,4 @@
-/* Copyright 2026 Talo
+﻿/* Copyright 2026 Talo
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,4 +49,9 @@
 /* Number of samples used to auto-detect the hall idle level at boot. */
 #define DEMO_HALL_SAMPLES 32
 
+/* EEPROM: on-chip Flash dual-page mirror (drivers/eeprom/eeprom_custom.c),
+ * EEPROM_SIZE partitions the dynamic-keymap area. */
+#define EEPROM_SIZE 2048
+
 #include_next <config.h>
+
