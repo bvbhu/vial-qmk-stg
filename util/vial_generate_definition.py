@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import sys
 import json
 import lzma
@@ -15,7 +15,7 @@ def main():
     data = json.dumps(json.loads(data), separators=(',', ':')).strip()
 
     # compress
-    data = lzma.compress(data.encode("utf-8"))
+    data = lzma.compress(data.encode("utf-8"), format=lzma.FORMAT_ALONE)
 
     with open(sys.argv[2], "w") as outf:
         outf.write("#pragma once\n")
@@ -28,3 +28,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
