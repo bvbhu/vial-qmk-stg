@@ -4,3 +4,7 @@
 # The keyboard-named source n32h481_demo.c (matrix + rgb_matrix driver)
 # is picked up automatically by the build.
 CUSTOM_MATRIX = lite
+
+USE_PROCESS_STACKSIZE = 0x8000
+USE_EXCEPTIONS_STACKSIZE = 0x2000
+
