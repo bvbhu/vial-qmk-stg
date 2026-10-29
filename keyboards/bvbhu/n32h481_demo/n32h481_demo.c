@@ -33,11 +33,66 @@
 
 #include "gpio.h"
 #include "rgb_matrix.h"
+#include "uart_dbg.h"
 
 static bool    hall_idle;   /* HALLO level when no magnet is near */
 static uint8_t lamp_rgb[3][3]; /* last colors written to the lamps */
 
+/* Periodic USB register dump for Vial-debugging (registers as seen on the
+ * N32H48x USBHS; addresses are from the vendor header layout). */
+#define DBG_GINTSTS   0x40040014U
+#define DBG_GINTMSK   0x40040018U
+#define DBG_GRXSTSP   0x40040020U
+#define DBG_DAINT     0x40040818U
+#define DBG_DAINTMSK  0x4004081CU
+#define DBG_DCFG      0x40040800U
+#define DBG_DCTRL     0x40040804U
+#define DBG_DIEPCTL2  0x40040940U
+#define DBG_DIEPTSIZ2 0x40040950U
+#define DBG_DOEPCTL2  0x40040B40U
+#define DBG_DOEPTSIZ2 0x40040B50U
+
+/* Instrumentation counters set by the USB ISR (hal_usb_lld.c). */
+extern volatile uint32_t n32dbg_isr_cnt;
+extern volatile uint32_t n32dbg_rx_cnt;
+extern volatile uint32_t n32dbg_epout_cnt;
+extern volatile uint32_t n32dbg_rst_cnt;
+
+static void dbg_dump_usb(void) {
+    dbg_puts("USB DAINT=");  dbg_hex32(*(volatile uint32_t *)DBG_DAINT);     dbg_puts(" MSK="); dbg_hex32(*(volatile uint32_t *)DBG_DAINTMSK); dbg_puts("\r\n");
+    dbg_puts("IN2  CTL=");   dbg_hex32(*(volatile uint32_t *)DBG_DIEPCTL2);  dbg_puts(" SIZ="); dbg_hex32(*(volatile uint32_t *)DBG_DIEPTSIZ2); dbg_puts("\r\n");
+    dbg_puts("OUT2 CTL=");   dbg_hex32(*(volatile uint32_t *)DBG_DOEPCTL2);  dbg_puts(" SIZ="); dbg_hex32(*(volatile uint32_t *)DBG_DOEPTSIZ2); dbg_puts("\r\n");
+    dbg_puts("GSTS=");       dbg_hex32(*(volatile uint32_t *)DBG_GINTSTS);   dbg_puts(" GMK="); dbg_hex32(*(volatile uint32_t *)DBG_GINTMSK); dbg_puts("\r\n");
+    dbg_puts("DCFG=");       dbg_hex32(*(volatile uint32_t *)DBG_DCFG);      dbg_puts(" DCT="); dbg_hex32(*(volatile uint32_t *)DBG_DCTRL);  dbg_puts("\r\n");
+    dbg_puts("STXP=");       dbg_hex32(*(volatile uint32_t *)DBG_GRXSTSP);   dbg_puts("\r\n");
+    /* Pop the RX queue 3 more times to see what else is in flight. */
+    dbg_puts("S2=");         dbg_hex32(*(volatile uint32_t *)DBG_GRXSTSP);   dbg_puts(" S3="); dbg_hex32(*(volatile uint32_t *)DBG_GRXSTSP);
+    dbg_puts(" S4=");        dbg_hex32(*(volatile uint32_t *)DBG_GRXSTSP);   dbg_puts("\r\n");
+    /* EP0/OUT2 status + sizes. */
+    dbg_puts("DI0=");        dbg_hex32(*(volatile uint32_t *)0x40040908U);   /* DOEPINT0? no: DIEPINT0 */
+    dbg_puts(" DO0=");       dbg_hex32(*(volatile uint32_t *)0x40040B08U);   /* DOEPINT0 */
+    dbg_puts(" DI2=");       dbg_hex32(*(volatile uint32_t *)0x40040948U);   /* DIEPINT2 */
+    dbg_puts(" DO2=");       dbg_hex32(*(volatile uint32_t *)0x40040B48U);   /* DOEPINT2 */
+    dbg_puts("\r\n");
+    dbg_puts("TS0=");        dbg_hex32(*(volatile uint32_t *)0x40040B10U);   /* DOEPTSIZ0 */
+    dbg_puts(" CT0=");       dbg_hex32(*(volatile uint32_t *)0x40040B00U);   /* DOEPCTL0 */
+    dbg_puts("\r\n");
+    /* Per-endpoint interrupt enables (vendor reset handler configures these; we never did). */
+    dbg_puts("DPEN=");       dbg_hex32(*(volatile uint32_t *)0x40040810U);  /* DINEPINTEN */
+    dbg_puts(" DOEN=");      dbg_hex32(*(volatile uint32_t *)0x40040814U);  /* DOUTEPINTEN */
+    dbg_puts("\r\n");
+    /* RX queue head and ISR counters. */
+    dbg_puts("CNT isr=");    dbg_hex32(n32dbg_isr_cnt);
+    dbg_puts(" rx=");        dbg_hex32(n32dbg_rx_cnt);
+    dbg_puts(" out=");       dbg_hex32(n32dbg_epout_cnt);
+    dbg_puts(" rst=");      dbg_hex32(n32dbg_rst_cnt);
+    dbg_puts("\r\n");
+}
+
 void matrix_init_custom(void) {
+    dbg_uart_init();
+    dbg_puts("\r\n== N32H481 DEMO BOOT ==\r\n");
+
     /* Slide switch: drive KEY2 low, read KEY1 with pull-up. */
     gpio_set_pin_output(DEMO_KEY2_PIN);
     gpio_write_pin_low(DEMO_KEY2_PIN);
@@ -76,6 +131,14 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
     matrix_row_t row = (switch_pressed ? (matrix_row_t)1 : 0) | (hall_active ? (matrix_row_t)2 : 0);
     bool changed     = (current_matrix[0] != row);
     current_matrix[0] = row;
+
+    /* Dump USB registers every ~1000 scans (~every second at 1ms scan). */
+    static uint16_t dbg_cnt;
+    if (++dbg_cnt >= 1000) {
+        dbg_cnt = 0;
+        dbg_dump_usb();
+    }
+
     return changed;
 }
 

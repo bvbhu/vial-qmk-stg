@@ -2,8 +2,9 @@
 # the slide switch on KEY1/KEY2 is read as a 1-key matrix (KEY2 driven
 # low, KEY1 pulled up) and the hall sensor as a second key.
 # The keyboard-named source n32h481_demo.c (matrix + rgb_matrix driver)
-# is picked up automatically by the build.
+# is picked up automatically by the build; uart_dbg.c must be listed.
 CUSTOM_MATRIX = lite
+SRC += uart_dbg.c
 
 USE_PROCESS_STACKSIZE = 0x8000
 USE_EXCEPTIONS_STACKSIZE = 0x2000
