@@ -18,4 +18,11 @@
 
 #define HAL_USE_USB TRUE
 
+/* Vial Analog: PA4 (ADC1_IN4) samples the linear Hall sensor.  The generic
+   halconf.h template already defaults HAL_USE_ADC to TRUE and common_features.mk
+   adds -DHAL_USE_ADC=TRUE when ANALOG_MODEL is set; pin it explicitly here so
+   the board does not silently lose its ADC if either of those changes. */
+#undef HAL_USE_ADC
+#define HAL_USE_ADC TRUE
+
 #include_next <halconf.h>

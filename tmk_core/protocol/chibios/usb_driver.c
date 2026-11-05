@@ -16,25 +16,51 @@
 /* Driver local functions.                                                   */
 /*===========================================================================*/
 
+/* Diagnostics: why does the RAW OUT endpoint never get armed?
+   Each early return in usb_start_receive() is counted separately so the UART
+   dump can show which condition kept usbStartReceiveI() from ever running
+   (and therefore why DOEPTSIZ for EP3 was never programmed). */
+volatile uint32_t qmk_dbg_sr_call;
+volatile uint32_t qmk_dbg_sr_notactive;
+volatile uint32_t qmk_dbg_sr_busy;
+volatile uint32_t qmk_dbg_sr_nobuf;
+volatile uint32_t qmk_dbg_sr_armed;
+volatile uint32_t qmk_dbg_sr_last_ep;
+volatile uint32_t qmk_dbg_sr_last_ep_armed;
+volatile uint32_t qmk_dbg_sr_last_ep_busy;
+volatile uint32_t qmk_dbg_receiving_bits;
+
 static void usb_start_receive(usb_endpoint_out_t *endpoint) {
+    qmk_dbg_sr_call++;
+    qmk_dbg_sr_last_ep = endpoint->config.ep;
+    qmk_dbg_receiving_bits = endpoint->config.usbp->receiving;
+
     /* If the USB driver is not in the appropriate state then transactions
        must not be started.*/
     if ((usbGetDriverStateI(endpoint->config.usbp) != USB_ACTIVE)) {
+        qmk_dbg_sr_notactive++;
         return;
     }
 
     /* Checking if there is already a transaction ongoing on the endpoint.*/
     if (usbGetReceiveStatusI(endpoint->config.usbp, endpoint->config.ep)) {
+        qmk_dbg_sr_busy++;
+        if (endpoint->config.ep == 3U)
+            qmk_dbg_sr_last_ep_busy++;
         return;
     }
 
     /* Checking if there is a buffer ready for incoming data.*/
     uint8_t *buffer = ibqGetEmptyBufferI(&endpoint->ibqueue);
     if (buffer == NULL) {
+        qmk_dbg_sr_nobuf++;
         return;
     }
 
     /* Buffer found, starting a new transaction.*/
+    qmk_dbg_sr_armed++;
+    if (endpoint->config.ep == 3U)
+        qmk_dbg_sr_last_ep_armed++;
     usbStartReceiveI(endpoint->config.usbp, endpoint->config.ep, buffer, endpoint->ibqueue.bsize - sizeof(size_t));
 }
 

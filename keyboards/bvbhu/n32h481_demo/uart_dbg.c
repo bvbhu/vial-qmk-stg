@@ -16,8 +16,18 @@
 #endif
 
 static void dbg_tx(char c) {
-    /* Wait TX data register empty (TXDE = STS bit7). */
+    /* Wait TX data register empty (TXDE = STS bit7).
+       BOUNDED: if the USART clock is not running (wrong BRCF source clock,
+       peripheral clock gated, or PA9 not muxed yet) TXDE never asserts and
+       the original unbounded loop HUNG THE WHOLE FIRMWARE.  Measured on
+       hardware: CPU stuck at dbg_tx+0x3 with USART1 STS.TXDE == 0, which
+       also stopped USB enumeration entirely.  Dropping debug output is
+       always preferable to bricking the device. */
+    uint32_t guard = 200000U;
     while ((USART1->STS & USART_STS_TXDE) == 0U) {
+        if (--guard == 0U) {
+            return;   /* give up on this byte, keep the firmware alive */
+        }
     }
     USART1->DAT = (uint32_t)(uint8_t)c;
 }

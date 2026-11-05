@@ -21,7 +21,8 @@
  *   [0,1] = KC_H  — hall sensor (U3 pin 6, HALLO)
  *
  * Type 'm' by flipping the slide switch, type 'h' by bringing a magnet
- * near the hall sensor. The three lamps mirror the inputs.
+ * near the hall sensor. The WS2812 strip runs RGB Matrix effects; it does
+ * not mirror the inputs.
  */
 
 #include QMK_KEYBOARD_H

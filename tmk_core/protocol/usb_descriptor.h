@@ -75,7 +75,13 @@ typedef struct {
     USB_Descriptor_Interface_t Raw_Interface;
     USB_HID_Descriptor_HID_t   Raw_HID;
     USB_Descriptor_Endpoint_t  Raw_INEndpoint;
+#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
+    /* Only present when the platform can actually receive on an interrupt OUT
+       endpoint.  On N32H481 the OUT data endpoints never accept a host packet,
+       so the field is omitted entirely and the configuration descriptor is
+       7 bytes shorter (wTotalLength is sizeof()'d, so it stays consistent). */
     USB_Descriptor_Endpoint_t  Raw_OUTEndpoint;
+#endif
 #endif
 
 #if defined(MOUSE_ENABLE) && !defined(MOUSE_SHARED_EP)
@@ -223,7 +229,15 @@ enum usb_endpoints {
 #    ifdef USB_ENDPOINTS_ARE_REORDERABLE
 #        define RAW_OUT_EPNUM RAW_IN_EPNUM
 #    else
+#        ifdef RAW_OUT_EPNUM_FIXED
+    /* The N32H481 USBHS device implements OUT endpoints 0 and 9..15 only -
+       there are no OUT EP1..EP8 registers at all (see USBHS_DOUTEPxCTRL,
+       x=[9..15], and the absence of OUTEPIEN1..8 in USBHS_DAEPINTEN).
+       Boards can pin the raw OUT endpoint into the implemented range. */
+    RAW_OUT_EPNUM = RAW_OUT_EPNUM_FIXED,
+#        else
     RAW_OUT_EPNUM         = NEXT_EPNUM,
+#        endif
 #    endif
 #endif
 

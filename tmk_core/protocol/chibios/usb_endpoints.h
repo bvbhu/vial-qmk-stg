@@ -124,7 +124,13 @@ typedef enum {
 extern usb_endpoint_in_lut_t usb_endpoint_interface_lut[TOTAL_INTERFACES];
 
 typedef enum {
-#if defined(RAW_ENABLE)
+#if defined(RAW_ENABLE) && defined(RAW_OUT_EP_IN_DESCRIPTOR)
+    /* Omitted when the RAW interface has no interrupt OUT endpoint: the
+       arrays in usb_endpoints.c are initialised by index, and every runtime
+       loop walks 0..USB_ENDPOINT_OUT_COUNT-1 calling usb_endpoint_out_*()
+       on each entry.  Leaving a zeroed entry in the table made those loops
+       operate on a NULL usbp/ibqueue, which faulted (CFSR IMPRECISERR) and
+       knocked the device off the bus. */
     USB_ENDPOINT_OUT_RAW,
 #endif
 #if defined(MIDI_ENABLE)

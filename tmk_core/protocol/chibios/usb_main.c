@@ -258,6 +258,86 @@ static void set_led_transfer_cb(USBDriver *usbp) {
     }
 }
 
+
+#if defined(RAW_ENABLE) && !defined(RAW_OUT_EP_IN_DESCRIPTOR)
+/* Raw HID reports arrive as the data stage of a SET_REPORT control transfer
+   on interface RAW_INTERFACE.  The Windows HID driver takes this path
+   automatically once the interface no longer advertises an interrupt OUT
+   endpoint, so stock Vial/VIA clients need no changes. */
+static uint8_t _Alignas(4) raw_set_report_buf[RAW_EPSIZE];
+
+/* Diagnostics for the SET_REPORT transport. */
+volatile uint32_t n32dbg_sr_cb_cnt;
+volatile uint32_t n32dbg_sr_cb_len;
+volatile uint32_t n32dbg_sr_cb_b0;
+volatile uint32_t n32dbg_sr_cb_b1;
+volatile uint32_t n32dbg_sr_cb_len2;
+volatile uint32_t n32dbg_sr_task_cnt;
+volatile uint32_t n32dbg_sr_tx_cnt;
+volatile uint32_t n32dbg_sr_tx_len;
+
+/* ISR -> task mailbox for SET_REPORT reports (see the callback below). */
+static uint8_t          raw_rx_buf[RAW_EPSIZE];
+static volatile uint8_t raw_rx_len;
+static volatile bool    raw_rx_pending;
+
+/* Plain prototype: the real raw_hid_receive() lives in via.c (or the user's
+   code).  Declaring it __attribute__((weak)) here made the linker route the
+   call through a local weak alias that did not match the real function; the
+   transfer then died with CFSR.INVPC (invalid PC) as soon as Vial tried to
+   remap a key. */
+void raw_hid_receive(uint8_t *data, uint8_t length);
+
+static void raw_set_report_transfer_cb(USBDriver *usbp) {
+    usb_control_request_t *setup = (usb_control_request_t *)usbp->setup;
+
+    /* Report-ID handling.
+       The RAW report descriptor declares no report IDs, yet Windows' HID
+       class driver still prefixes every report with one zero byte (and
+       expects the same on the way back).  On the wire there is no such byte,
+       so the OUT direction drops the leading 0x00 here:
+         host buffer: [0x00][0xFE][cmd]...   ->  msg: [0xFE][cmd]...
+       The reply path adds nothing; the class driver inserts the 0x00. */
+    uint16_t n = setup->wLength;
+    if (n > RAW_EPSIZE) {
+        n = RAW_EPSIZE;
+    }
+
+    uint8_t *payload = raw_set_report_buf;
+    uint8_t  len     = (uint8_t)n;
+
+    if (n > 0 && raw_set_report_buf[0] == 0x00) {
+        payload = raw_set_report_buf + 1;
+        len     = (uint8_t)(n - 1);
+    }
+
+    if (len == 0) {
+        return;
+    }
+
+    /* Diagnostics for the SET_REPORT transport (read through SWD, no UART). */
+    n32dbg_sr_cb_cnt++;
+    n32dbg_sr_cb_len = n;
+    n32dbg_sr_cb_b0  = raw_set_report_buf[0];
+    n32dbg_sr_cb_b1  = raw_set_report_buf[1];
+    n32dbg_sr_cb_len2 = len;
+
+    /* This callback runs in the USB ISR.  VIA/Vial command handlers are far
+       too heavy for interrupt context (they walk the keymap, touch EEPROM and
+       can take milliseconds), so hand the report to raw_hid_task() through a
+       one-deep mailbox instead of calling into the protocol here.  The
+       control-transfer data buffer is reused by the next SET_REPORT, so the
+       bytes must be copied out before returning.
+       The newest report always wins: overwriting a stale request is harmless
+       (the host retries), but never processing the latest one hangs the
+       client - which is what happened with a "keep the first" mailbox: the
+       host's retries all landed while a reply was still in flight. */
+    memcpy(raw_rx_buf, payload, len < RAW_EPSIZE ? len : RAW_EPSIZE);
+    raw_rx_len     = len;
+    raw_rx_pending = true;
+}
+#endif
+
 static bool usb_requests_hook_cb(USBDriver *usbp) {
     usb_control_request_t *setup = (usb_control_request_t *)usbp->setup;
 
@@ -291,6 +371,19 @@ static bool usb_requests_hook_cb(USBDriver *usbp) {
 #endif
                                 usbSetupTransfer(usbp, set_report_buf, sizeof(set_report_buf), set_led_transfer_cb);
                                 return true;
+#if defined(RAW_ENABLE) && !defined(RAW_OUT_EP_IN_DESCRIPTOR)
+                            /* N32H481: the RAW interface has no interrupt OUT
+                               endpoint (this MCU's OUT data endpoints never
+                               receive), so the host delivers raw HID reports
+                               through SET_REPORT on EP0 instead.  Data lands
+                               in the OUT data stage, then raw_hid_set_report_cb
+                               hands it to raw_hid_receive(). */
+                            case RAW_INTERFACE:
+                                usbSetupTransfer(usbp, raw_set_report_buf,
+                                                 sizeof(raw_set_report_buf),
+                                                 raw_set_report_transfer_cb);
+                                return true;
+#endif
                         }
                         break;
                     case HID_REQ_SetProtocol:
@@ -523,14 +616,31 @@ void send_raw_hid(uint8_t *data, uint8_t length) {
     if (length != RAW_EPSIZE) {
         return;
     }
+    /* No report-ID padding: the RAW report descriptor declares no report IDs,
+       so on the wire a report is exactly RAW_EPSIZE bytes and the Windows HID
+       class driver inserts the leading 0x00 itself when handing the buffer
+       back to the application. */
     send_report(USB_ENDPOINT_IN_RAW, data, length);
 }
 
 void raw_hid_task(void) {
+#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
     uint8_t buffer[RAW_EPSIZE];
     while (receive_report(USB_ENDPOINT_OUT_RAW, buffer, sizeof(buffer))) {
         raw_hid_receive(buffer, sizeof(buffer));
     }
+#else
+    /* Reports arrive as SET_REPORT control transfers; the ISR parks them in
+       the mailbox and the protocol handler runs here, in thread context. */
+    if (raw_rx_pending) {
+        uint8_t buf[RAW_EPSIZE];
+        uint8_t len = raw_rx_len;
+        memcpy(buf, raw_rx_buf, len < RAW_EPSIZE ? len : RAW_EPSIZE);
+        raw_rx_pending = false;
+        n32dbg_sr_task_cnt++;
+        raw_hid_receive(buf, len);
+    }
+#endif
 }
 
 #endif
