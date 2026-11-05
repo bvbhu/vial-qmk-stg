@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import sys
 import json
 import lzma
@@ -28,4 +28,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -267,16 +267,6 @@ static void set_led_transfer_cb(USBDriver *usbp) {
    endpoint, so stock Vial/VIA clients need no changes. */
 static uint8_t _Alignas(4) raw_set_report_buf[RAW_EPSIZE];
 
-/* Diagnostics for the SET_REPORT transport. */
-volatile uint32_t n32dbg_sr_cb_cnt;
-volatile uint32_t n32dbg_sr_cb_len;
-volatile uint32_t n32dbg_sr_cb_b0;
-volatile uint32_t n32dbg_sr_cb_b1;
-volatile uint32_t n32dbg_sr_cb_len2;
-volatile uint32_t n32dbg_sr_task_cnt;
-volatile uint32_t n32dbg_sr_tx_cnt;
-volatile uint32_t n32dbg_sr_tx_len;
-
 /* ISR -> task mailbox for SET_REPORT reports (see the callback below). */
 static uint8_t          raw_rx_buf[RAW_EPSIZE];
 static volatile uint8_t raw_rx_len;
@@ -292,36 +282,25 @@ void raw_hid_receive(uint8_t *data, uint8_t length);
 static void raw_set_report_transfer_cb(USBDriver *usbp) {
     usb_control_request_t *setup = (usb_control_request_t *)usbp->setup;
 
-    /* Report-ID handling.
-       The RAW report descriptor declares no report IDs, yet Windows' HID
-       class driver still prefixes every report with one zero byte (and
-       expects the same on the way back).  On the wire there is no such byte,
-       so the OUT direction drops the leading 0x00 here:
-         host buffer: [0x00][0xFE][cmd]...   ->  msg: [0xFE][cmd]...
-       The reply path adds nothing; the class driver inserts the 0x00. */
+    /* A valid RAW HID report is exactly RAW_EPSIZE bytes: the report
+       descriptor declares no report ID, and the Windows HID class driver
+       inserts its leading 0x00 only in the application-facing buffer, not
+       on the wire.  Never infer framing from the first payload byte --
+       the old "if (buf[0] == 0x00) strip it" path handed RAW_EPSIZE-1 to
+       raw_hid_receive(), whose raw_hid_send() drops any reply with a length
+       other than RAW_EPSIZE, so a legitimate all-zero first byte would hang
+       the client.  Always pass a full RAW_EPSIZE report to the protocol
+       layer; wLength (clamped) only bounds how many bytes are copied out of
+       the control-transfer buffer, and the tail is zeroed below. */
     uint16_t n = setup->wLength;
     if (n > RAW_EPSIZE) {
         n = RAW_EPSIZE;
     }
-
-    uint8_t *payload = raw_set_report_buf;
-    uint8_t  len     = (uint8_t)n;
-
-    if (n > 0 && raw_set_report_buf[0] == 0x00) {
-        payload = raw_set_report_buf + 1;
-        len     = (uint8_t)(n - 1);
+    if (n == 0) {
+        return; /* Zero-length SET_REPORT: nothing was staged, ignore it. */
     }
 
-    if (len == 0) {
-        return;
-    }
-
-    /* Diagnostics for the SET_REPORT transport (read through SWD, no UART). */
-    n32dbg_sr_cb_cnt++;
-    n32dbg_sr_cb_len = n;
-    n32dbg_sr_cb_b0  = raw_set_report_buf[0];
-    n32dbg_sr_cb_b1  = raw_set_report_buf[1];
-    n32dbg_sr_cb_len2 = len;
+    const uint8_t len = RAW_EPSIZE;
 
     /* This callback runs in the USB ISR.  VIA/Vial command handlers are far
        too heavy for interrupt context (they walk the keymap, touch EEPROM and
@@ -333,7 +312,12 @@ static void raw_set_report_transfer_cb(USBDriver *usbp) {
        (the host retries), but never processing the latest one hangs the
        client - which is what happened with a "keep the first" mailbox: the
        host's retries all landed while a reply was still in flight. */
-    memcpy(raw_rx_buf, payload, len < RAW_EPSIZE ? len : RAW_EPSIZE);
+    /* Only wLength (clamped) bytes were staged by the control transfer;
+       zero the tail so a short request can never feed stale bytes from a
+       previous report into the protocol layer.  The full RAW_EPSIZE report
+       is still what Vial receives, so the verified path is unchanged. */
+    memset(raw_rx_buf, 0, RAW_EPSIZE);
+    memcpy(raw_rx_buf, raw_set_report_buf, n);
     raw_rx_len     = len;
     raw_rx_pending = true;
 }
@@ -639,7 +623,6 @@ void raw_hid_task(void) {
         uint8_t len = raw_rx_len;
         memcpy(buf, raw_rx_buf, len < RAW_EPSIZE ? len : RAW_EPSIZE);
         raw_rx_pending = false;
-        n32dbg_sr_task_cnt++;
         raw_hid_receive(buf, len);
     }
 #endif
