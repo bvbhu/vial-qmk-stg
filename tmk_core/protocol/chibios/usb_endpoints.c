@@ -138,11 +138,7 @@ usb_endpoint_in_lut_t usb_endpoint_interface_lut[TOTAL_INTERFACES] = {
 };
 
 usb_endpoint_out_t usb_endpoints_out[USB_ENDPOINT_OUT_COUNT] = {
-#if defined(RAW_ENABLE) && !defined(RAW_OUT_EP_IN_DESCRIPTOR)
-    /* RAW reports arrive via SET_REPORT on EP0 instead of an interrupt OUT
-       pipe (see usb_descriptor.c / usb_main.c), so this endpoint is never
-       opened and must not be initialised here. */
-#elif defined(RAW_ENABLE)
+#if defined(RAW_ENABLE) && !defined(RAW_HID_SET_REPORT_TRANSPORT)
     [USB_ENDPOINT_OUT_RAW] = QMK_USB_ENDPOINT_OUT(USB_EP_MODE_TYPE_INTR, RAW_EPSIZE, RAW_OUT_EPNUM, RAW_OUT_CAPACITY),
 #endif
 

@@ -63,7 +63,7 @@
 #include "matrix.h"               /* MATRIX_ROWS/COLS must precede analog_core.h */
 #include "analog/analog_core.h"   /* Vial Analog core (0xF0-0xF6 backing store) */
 #include "rgb_matrix.h"
-#include "drivers/ws2812_n32.h"
+#include "ws2812_n32.h"
 #include "uart_dbg.h"
 
 #define DEMO_MECH_KI 0u

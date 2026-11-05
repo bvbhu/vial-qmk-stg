@@ -45,7 +45,8 @@
 #define DEMO_LEDP_PIN A2
 #define DEMO_LEDM_PIN A3
 #define DEMO_HALL_PIN A4
-/* PC3 is the WS2812 data line (WS2812_DI_PIN in drivers/ws2812_n32.h).
+/* PC3 is the WS2812 data line (WS2812_DI_PIN in
+   platforms/chibios/drivers/ws2812_n32.h).
    It is deliberately not exposed as a GPIO lamp here: driving it as a
    plain output fights the LED strip protocol. */
 
@@ -153,22 +154,16 @@
  * endpoint outside that range made it silently dead (DOEPINT stayed 0, PKTCNT
  * never decremented, the host's WriteFile hung forever).
  *
- * Two transports are therefore available:
- *
- *   A) Interrupt OUT on EP9  - "stock QMK" path.  Keep RAW_OUT_EP_IN_DESCRIPTOR
- *      defined and RAW_OUT_EPNUM_FIXED at 9.  Requires N32_USBHS_ENDPOINTS >= 15
- *      so epc[9] exists and the DAEPINT bit25 dispatch is compiled in.
- *
- *   B) SET_REPORT on EP0     - the proven fallback.  With the endpoint left out
- *      of the descriptor the Windows HID class driver routes hid_write()
- *      through a control transfer, which works on this silicon (verified: the
- *      Vial GUI enumerated the keyboard and key remaps went through).  Stock
- *      Vial clients need no changes.
- *
- * Transport B is active: it is the one that is known to work end to end here.
+ * Opt in to the SET_REPORT transport (the one verified end to end here): the
+ * RAW interface omits its interrupt OUT endpoint and the Windows HID class
+ * driver routes raw reports through SET_REPORT control transfers on EP0.
+ * Stock Vial/VIA clients need no changes.  Leaving this undefined restores
+ * stock QMK behaviour; on this silicon that alternative needs
+ * RAW_OUT_EPNUM_FIXED 9 and N32_USBHS_ENDPOINTS >= 15 to reach an implemented
+ * OUT endpoint.
  */
+#define RAW_HID_SET_REPORT_TRANSPORT 1
 /* #define RAW_OUT_EPNUM_FIXED 9 */
-/* #define RAW_OUT_EP_IN_DESCRIPTOR 1 */
 
 #include_next <config.h>
 

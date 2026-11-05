@@ -259,9 +259,10 @@ static void set_led_transfer_cb(USBDriver *usbp) {
 }
 
 
-#if defined(RAW_ENABLE) && !defined(RAW_OUT_EP_IN_DESCRIPTOR)
-/* Raw HID reports arrive as the data stage of a SET_REPORT control transfer
-   on interface RAW_INTERFACE.  The Windows HID driver takes this path
+#if defined(RAW_ENABLE) && defined(RAW_HID_SET_REPORT_TRANSPORT)
+/* Opt-in transport for boards whose OUT data endpoints cannot receive: raw
+   HID reports arrive as the data stage of a SET_REPORT control transfer on
+   interface RAW_INTERFACE.  The Windows HID driver takes this path
    automatically once the interface no longer advertises an interrupt OUT
    endpoint, so stock Vial/VIA clients need no changes. */
 static uint8_t _Alignas(4) raw_set_report_buf[RAW_EPSIZE];
@@ -371,13 +372,14 @@ static bool usb_requests_hook_cb(USBDriver *usbp) {
 #endif
                                 usbSetupTransfer(usbp, set_report_buf, sizeof(set_report_buf), set_led_transfer_cb);
                                 return true;
-#if defined(RAW_ENABLE) && !defined(RAW_OUT_EP_IN_DESCRIPTOR)
-                            /* N32H481: the RAW interface has no interrupt OUT
-                               endpoint (this MCU's OUT data endpoints never
-                               receive), so the host delivers raw HID reports
-                               through SET_REPORT on EP0 instead.  Data lands
-                               in the OUT data stage, then raw_hid_set_report_cb
-                               hands it to raw_hid_receive(). */
+#if defined(RAW_ENABLE) && defined(RAW_HID_SET_REPORT_TRANSPORT)
+                            /* Opt-in boards (N32H481): the RAW interface has
+                               no interrupt OUT endpoint (this MCU's OUT data
+                               endpoints never receive), so the host delivers
+                               raw HID reports through SET_REPORT on EP0
+                               instead.  Data lands in the OUT data stage, then
+                               raw_set_report_transfer_cb hands it to
+                               raw_hid_receive(). */
                             case RAW_INTERFACE:
                                 usbSetupTransfer(usbp, raw_set_report_buf,
                                                  sizeof(raw_set_report_buf),
@@ -617,14 +619,14 @@ void send_raw_hid(uint8_t *data, uint8_t length) {
         return;
     }
     /* No report-ID padding: the RAW report descriptor declares no report IDs,
-       so on the wire a report is exactly RAW_EPSIZE bytes and the Windows HID
+       so on the wire a report is exactly RAW_EPSIZE bytes.  The Windows HID
        class driver inserts the leading 0x00 itself when handing the buffer
        back to the application. */
     send_report(USB_ENDPOINT_IN_RAW, data, length);
 }
 
 void raw_hid_task(void) {
-#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
+#if !defined(RAW_HID_SET_REPORT_TRANSPORT)
     uint8_t buffer[RAW_EPSIZE];
     while (receive_report(USB_ENDPOINT_OUT_RAW, buffer, sizeof(buffer))) {
         raw_hid_receive(buffer, sizeof(buffer));

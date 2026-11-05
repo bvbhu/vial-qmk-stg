@@ -46,9 +46,8 @@ J-Link        →  开发板
 
 ```sh
 qmk compile -kb bvbhu/n32h481_demo -km default
-# 或
+# 或（47 脚虚焊/引脚测试固件）
 qmk compile -kb bvbhu/n32h481_iotest -km default
-qmk compile -kb bvbhu/n32h481_test -km default
 ```
 
 产物在仓库根目录:`bvbhu_n32h481_demo_default.bin` 等。
@@ -112,8 +111,8 @@ JLink.exe -device N32H481RE -if SWD -speed 4000 -CommanderScript flash.jlink
 
 烧录后:
 
-- **n32h481_test / n32h481_iotest**:USB 接电脑,枚举为 HID 键盘;iotest
-  里短接任意引脚到 GND,屏幕输出对应字母(大写/小写区分引脚)。
+- **n32h481_iotest**:USB 接电脑,枚举为 HID 键盘;短接任意引脚到 GND,
+  屏幕输出对应字母(大写/小写区分引脚)。
 - **n32h481_demo**:拨动 U2 开关输出 `m`、磁铁靠近霍尔输出 `h`;
   三个灯分别亮红/绿/蓝。
 - 若 USB 不枚举:检查 B14/B15(USB D-/D+)接线与 48MHz USBHS 时钟

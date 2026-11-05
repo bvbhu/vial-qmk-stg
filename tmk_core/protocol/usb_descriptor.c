@@ -592,17 +592,13 @@ const USB_Descriptor_Configuration_t PROGMEM ConfigurationDescriptor = {
     /*
      * Raw HID
      *
-     * IMPORTANT (N32H481 port): the RAW interface advertises ONLY the IN
-     * (device-to-host) interrupt endpoint.  The OUT data endpoints of this
-     * MCU's USBHS peripheral never accept a host OUT packet (DOEPINT stays 0
-     * and DOEPTSIZ.PKTCNT never decrements, even though the endpoint is
-     * armed with EPENA=1/NAKSTS=0 and the host's WriteFile() blocks forever).
-     * EP0 control transfers are unaffected and work perfectly.
-     *
-     * With no OUT endpoint in the descriptor, the Windows HID class driver
-     * routes hid_write() through SET_REPORT (a control transfer) instead of
-     * the interrupt OUT pipe, so an unmodified Vial/VIA client keeps working.
-     * The received report is injected into raw_hid_receive() in usb_main.c.
+     * Stock QMK advertises both interrupt IN and interrupt OUT endpoints.
+     * Boards may opt in to RAW_HID_SET_REPORT_TRANSPORT: the OUT endpoint is
+     * then omitted and the host delivers raw reports as SET_REPORT control
+     * transfers on EP0 instead.  N32H481 needs this because its OUT data
+     * endpoints never accept a host packet (DOEPINT stays 0 and
+     * DOEPTSIZ.PKTCNT never decrements even with EPENA=1/NAKSTS=0, while the
+     * host's WriteFile() blocks forever).  EP0 control transfers work fine.
      */
     .Raw_Interface = {
         .Header = {
@@ -611,10 +607,10 @@ const USB_Descriptor_Configuration_t PROGMEM ConfigurationDescriptor = {
         },
         .InterfaceNumber        = RAW_INTERFACE,
         .AlternateSetting       = 0x00,
-#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
-        .TotalEndpoints         = 2,
-#else
+#if defined(RAW_HID_SET_REPORT_TRANSPORT)
         .TotalEndpoints         = 1,
+#else
+        .TotalEndpoints         = 2,
 #endif
         .Class                  = HID_CSCP_HIDClass,
         .SubClass               = HID_CSCP_NonBootSubclass,
@@ -642,7 +638,7 @@ const USB_Descriptor_Configuration_t PROGMEM ConfigurationDescriptor = {
         .EndpointSize           = RAW_EPSIZE,
         .PollingIntervalMS      = 0x01
     },
-#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
+#if !defined(RAW_HID_SET_REPORT_TRANSPORT)
     .Raw_OUTEndpoint = {
         .Header = {
             .Size               = sizeof(USB_Descriptor_Endpoint_t),
@@ -653,7 +649,7 @@ const USB_Descriptor_Configuration_t PROGMEM ConfigurationDescriptor = {
         .EndpointSize           = RAW_EPSIZE,
         .PollingIntervalMS      = 0x01
     },
-#endif /* RAW_OUT_EP_IN_DESCRIPTOR */
+#endif /* !RAW_HID_SET_REPORT_TRANSPORT */
 #endif /* RAW_ENABLE */
 
 #if defined(MOUSE_ENABLE) && !defined(MOUSE_SHARED_EP)

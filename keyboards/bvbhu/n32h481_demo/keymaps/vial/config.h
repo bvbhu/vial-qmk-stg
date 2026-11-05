@@ -15,7 +15,7 @@
  */
 #pragma once
 
-/* Vial keyboard unique ID (random, distinct from n32h481_ec). */
+/* Vial keyboard unique ID (random, unique per keyboard). */
 #define VIAL_KEYBOARD_UID {0x6E, 0x1A, 0xC3, 0xF8, 0x4B, 0x09, 0xD2, 0x77}
 
 #define DYNAMIC_KEYMAP_LAYER_COUNT 4

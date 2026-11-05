@@ -10,7 +10,10 @@ USE_PROCESS_STACKSIZE = 0x8000
 USE_EXCEPTIONS_STACKSIZE = 0x2000
 
 # WS2812 strip on PC3 (bit-banged; the N32 port has no PWM/GPT LLD).
-SRC += drivers/ws2812_n32.c
+# ws2812_n32.c/.h live in platforms/chibios/drivers/ alongside analog.c and
+# the other WS2812 backends; that directory is already on VPATH via
+# platforms/common.mk, so a bare filename resolves (same pattern as analog.c).
+SRC += ws2812_n32.c
 
 # Vial Analog / vial-stg "Analog (键程)" page.  Declaring ANALOG_MODEL pulls in
 # analog_core.c + analog_model_linear.c, the 0xF0-0xF6 protocol extension in

@@ -84,10 +84,10 @@ void __early_init(void) {
 void boardInit(void) {
   /* SWD/JTAG debug interface is deliberately LEFT ENABLED here.
      N32H481 binds PA13/PA14/PA15/PB3/PB4 to the debug interface after
-     reset; a keyboard that needs those pins as GPIO (e.g. n32h481_ec uses
-     A13 as a matrix row and A15/B3/B4 as mux selectors) must release them
-     in its OWN init code (set AFIO_RMP_CFG.SWJ_CFG to SWJ_SWD to keep SWD,
-     or SWJ_DISABLE if it gives up debugging), not in this generic board.
+     reset; a keyboard that needs those pins as GPIO (e.g. as matrix rows
+     or mux selectors) must release them in its OWN init code (set
+     AFIO_RMP_CFG.SWJ_CFG to SWJ_SWD to keep SWD, or SWJ_DISABLE if it
+     gives up debugging), not in this generic board.
      Disabling SWJ here made every firmware on this board lose SWD after
      boot -- the J-Link could no longer connect or reflash the chip. */
 }

@@ -75,11 +75,12 @@ typedef struct {
     USB_Descriptor_Interface_t Raw_Interface;
     USB_HID_Descriptor_HID_t   Raw_HID;
     USB_Descriptor_Endpoint_t  Raw_INEndpoint;
-#if defined(RAW_OUT_EP_IN_DESCRIPTOR)
-    /* Only present when the platform can actually receive on an interrupt OUT
-       endpoint.  On N32H481 the OUT data endpoints never accept a host packet,
-       so the field is omitted entirely and the configuration descriptor is
-       7 bytes shorter (wTotalLength is sizeof()'d, so it stays consistent). */
+#if !defined(RAW_HID_SET_REPORT_TRANSPORT)
+    /* Stock QMK: the RAW interface has an interrupt OUT endpoint.  Boards that
+       opt in to RAW_HID_SET_REPORT_TRANSPORT (e.g. N32H481, whose OUT data
+       endpoints never accept a host packet) omit this field entirely; the
+       configuration descriptor is then 7 bytes shorter (wTotalLength is
+       sizeof()'d, so it stays consistent). */
     USB_Descriptor_Endpoint_t  Raw_OUTEndpoint;
 #endif
 #endif
