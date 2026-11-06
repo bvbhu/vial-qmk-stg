@@ -195,7 +195,11 @@ _Static_assert(ANALOG_DEFAULT_ACTUATION_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 
 _Static_assert(ANALOG_DEFAULT_RELEASE_OFFSET <= ANALOG_MAX_TRAVEL, "出厂 RT 释放距离超出 ANALOG_MAX_TRAVEL");
 /* 触底校准读数必须比初始校准读数更深：clamp 边界 top ≤ TOPREADING_MAX 与 bottom ≥ BOTTOMREADING_MIN
  * 只有在 BOTTOMREADING_MIN > TOPREADING_MAX 时才保证 top < bottom。模型层的派生
- * 参数量级断言(analog_model_isf.c)也用这条来保证它的分母为正。 */
+ * 参数量级断言(analog_model_isf.c)也用这条来保证它的分母为正。
+ *
+ * 原始读数域方向由 kb 负责归一化：kb 若天然是递减域(如线性霍尔输出随磁铁
+ * 靠近而下降)，应在 0xF3 hook 里用 abs(adc - 实测零场点) 转成递增的偏差域，
+ * 而不是让核心层放宽这条校准不变量。 */
 _Static_assert(ANALOG_BOTTOMREADING_MIN > ANALOG_TOPREADING_MAX, "默认校准值必须 bottom > top，否则无效读数态就倒挂");
 
 /* ---- 6.5 原始读数域(ADC 位宽与钳位上界) ----

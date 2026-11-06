@@ -124,7 +124,13 @@ typedef enum {
 extern usb_endpoint_in_lut_t usb_endpoint_interface_lut[TOTAL_INTERFACES];
 
 typedef enum {
-#if defined(RAW_ENABLE)
+#if defined(RAW_ENABLE) && !defined(RAW_HID_SET_REPORT_TRANSPORT)
+    /* Stock QMK always has a RAW OUT endpoint.  Boards using
+       RAW_HID_SET_REPORT_TRANSPORT have no interrupt OUT endpoint, so the
+       entry must be omitted: the arrays in usb_endpoints.c are initialised by
+       index and every runtime loop walks 0..USB_ENDPOINT_OUT_COUNT-1 calling
+       usb_endpoint_out_*() on each entry.  A zeroed entry would make those
+       loops operate on a NULL usbp/ibqueue (CFSR IMPRECISERR, device drops). */
     USB_ENDPOINT_OUT_RAW,
 #endif
 #if defined(MIDI_ENABLE)
