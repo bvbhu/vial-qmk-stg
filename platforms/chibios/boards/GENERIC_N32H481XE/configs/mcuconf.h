@@ -71,4 +71,30 @@
 #define N32_USB_USE_OTG1                   TRUE
 #define N32_USB_OTG1_IRQ_PRIORITY          5
 
+/*
+ * SERIAL driver system settings (ChibiOS HAL_USE_SERIAL).
+ * The driver only gets compiled when the keyboard halconf.h sets
+ * HAL_USE_SERIAL to TRUE.  USART1 is already occupied by the
+ * n32h481_demo uart_dbg.c polling console, so USART2 (SD2, PA2/PA3)
+ * is the default instance here; enable any other instance as needed.
+ * IRQ priority 12 follows the other N32 LLD defaults.
+ */
+#define N32_SERIAL_USE_USART1              FALSE
+#define N32_SERIAL_USE_USART2              TRUE
+#define N32_SERIAL_USE_USART3              FALSE
+#define N32_SERIAL_USE_USART4              FALSE
+#define N32_SERIAL_USE_UART5               FALSE
+#define N32_SERIAL_USE_UART6               FALSE
+#define N32_SERIAL_USE_UART7               FALSE
+#define N32_SERIAL_USE_UART8               FALSE
+
+#define N32_SERIAL_USART1_IRQ_PRIORITY     12
+#define N32_SERIAL_USART2_IRQ_PRIORITY     12
+#define N32_SERIAL_USART3_IRQ_PRIORITY     12
+#define N32_SERIAL_USART4_IRQ_PRIORITY     12
+#define N32_SERIAL_UART5_IRQ_PRIORITY      12
+#define N32_SERIAL_UART6_IRQ_PRIORITY      12
+#define N32_SERIAL_UART7_IRQ_PRIORITY      12
+#define N32_SERIAL_UART8_IRQ_PRIORITY      12
+
 #endif /* MCUCONF_H */

@@ -74,6 +74,40 @@ make bvbhu/n32h481_iotest:default
 
 产物：`bvbhu_n32h481_iotest_default.bin`（当前约 25KB）。
 
+## ChibiOS SERIAL 驱动（UART）
+
+本键盘的 `halconf.h` 打开了 `HAL_USE_SERIAL`，板级
+`GENERIC_N32H481XE/configs/mcuconf.h` 默认把 `N32_SERIAL_USE_USART2` 设为
+`TRUE`，所以这个构建会编译进 N32 的 USARTv1 SERIAL LLD 并实例化 `SD2`
+（USART2）。这是驱动的编译回归载体，驱动本身**不占用任何引脚**：
+
+```c
+#include "hal.h"
+#include <string.h>
+
+static const SerialConfig uart_cfg = {
+    .speed = 115200U,
+    .ctrl1 = 0U,                          /* 8N1, 16x oversampling */
+    .ctrl2 = N32_USART_CTRL2_STOP1_BITS,  /* 1 stop bit */
+    .ctrl3 = 0U
+};
+
+void board_uart_init(void) {
+    /* 先按数据手册把 PA2/PA3 配成 USART2 的复用功能，再启动驱动 */
+    sdStart(&SD2, &uart_cfg);
+}
+
+void board_uart_write(const char *s) {
+    sdWrite(&SD2, (const uint8_t *)s, strlen(s));
+}
+```
+
+`sdStart(&SD2, NULL)` 使用默认配置 38400 8N1。8 个实例
+（`USART1`/`USART2`/`USART3`/`USART4`/`UART5`/`UART6`/`UART7`/`UART8`）由
+`mcuconf.h` 里的 `N32_SERIAL_USE_*` 开关选择，对应 `SD1..SD8`；USART1/4/6/7
+走 `PCLK2`，USART2/3/5/8 走 `PCLK1`。**USART1 已被 `n32h481_demo/uart_dbg.c`
+的轮询调试口占用，不要同时启用 `N32_SERIAL_USE_USART1`。**
+
 ## 烧录
 
 板子没有 QMK bootloader（`bootloader: custom`），用 **J-Link** 配合

@@ -20,4 +20,10 @@
 
 #define HAL_USE_USB TRUE
 
+/* ChibiOS SERIAL driver (SD2 = USART2).  Enabled here so the N32 USARTv1
+   LLD is actually compiled and exercised by the bvbhu/n32h481_iotest:default
+   build.  Pin muxing is left to the board/user code; call sdStart(&SD2, NULL)
+   for 38400 8N1 before using the driver. */
+#define HAL_USE_SERIAL TRUE
+
 #include_next <halconf.h>
