@@ -218,6 +218,11 @@ void housekeeping_task_user(void)
 // 低功耗外围设备电源控制
 void lpm_device_power_open(void)
 {
+    // EC 运放(SGM8053)使能：第5脚 DISABLE，高=工作。
+    // 板上该脚只有 100k 下拉(R19)，必须由固件主动驱动成高，否则运放全程关断。
+    gpio_set_pin_output(OPAMP_EN_PIN);
+    gpio_write_pin_high(OPAMP_EN_PIN);
+
 #if defined(RGBLIGHT_WS2812) && defined(RGBLIGHT_ENABLE)
     // ws2812电源开启
     ws2812_init();
@@ -229,6 +234,9 @@ void lpm_device_power_open(void)
 //关闭外围设备电源
 void lpm_device_power_close(void)
 {
+    // EC 运放关断：休眠期间省约 2.3mA；唤醒后 power_open / ec_init 会重新拉高
+    gpio_write_pin_low(OPAMP_EN_PIN);
+
 #if defined(RGBLIGHT_WS2812) && defined(RGBLIGHT_ENABLE)
     // ws2812电源关闭
     rgblight_setrgb_at(0, 0, 0, 0);

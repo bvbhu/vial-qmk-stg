@@ -68,7 +68,12 @@
 #define ANALOG_PORT A4
 // 放大器使能脚
 #define OPAMP_EN_PIN A6
-// 高电平使能
+/* 高电平使能(OPAMP_EN_ACTIVE=1)。注意 U10 = SGM8053XN6 的该脚名叫 DISABLE，
+ * 但数据手册电特性明确：DISABLE Voltage-Off = 0.8V MAX(≤0.8V 关断)、
+ * DISABLE Voltage-On = 2V MIN(≥2V 工作)，即"低=关断、高=使能"。
+ * 该脚板上只有 100k 下拉(R19)，下拉仅保证 MCU 复位期间运放关断；
+ * 正常运行必须由固件主动拉高，否则 A4 读数恒为 0、整机无键。
+ * 切勿把它改成 0（低有效）——那会让 8053 全程 shutdown。 */
 #define OPAMP_EN_ACTIVE 1
 // 放电时间(us)
 #define DISCHARGE_TIME 1

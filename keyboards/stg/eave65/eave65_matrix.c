@@ -56,9 +56,20 @@ static bool is_unused_position(uint8_t row, uint8_t col) {
 static adc_mux  ec_adc_mux;                          /* ADC 检测通道(ANALOG_PORT) */
 static uint16_t last_absv[MATRIX_ROWS][MATRIX_COLS]; /* 每键最近一次真实 ADC 读数 */
 
-/* ---- 运放使能(OPAMP_EN_PIN，OPAMP_EN_ACTIVE=1 高有效) ----
- * EC 信号经运放放大后送 ANALOG_PORT(A4)；运放关闭则 A4 读数恒为 0。
- * 扫描/采样期间开启、结束关闭以省电(BLE/LPM)。 */
+/* ---- 运放使能(OPAMP_EN_PIN) ----
+ * U10 = SGM8053XN6（SOT-23-6）：1=OUT 2=-VS 3=+IN 4=-IN 5=DISABLE 6=+VS。
+ * 数据手册电特性：DISABLE Voltage-Off = 0.8V MAX（≤0.8V 关断）
+ *                 DISABLE Voltage-On  = 2V   MIN（≥2V   工作）
+ * => 脚名叫 DISABLE，但语义是"低=关断、高=使能"，所以必须由 MCU 主动驱动成高。
+ *
+ * 该脚板上挂了 100k 下拉(R19)，下拉的唯一作用是 MCU 未上电/复位期间保证运放关断；
+ * 固件若不主动拉高，运放就一直是关的，A4 读数恒为 0（表现为整机无键）。
+ *
+ * OPAMP_KEEP_ENABLED=1（默认）：初始化即拉高并**保持**，不再每次扫描后拉低。
+ *   原因：8053 的 Turn-On Time 为 236ns，而扫描前的建立空转只有几十 ns 量级，
+ *   "关断-开启"抖动会让首批采样落在建立过程中，读数偏低/漂移。
+ *   代价：常驻约 2.3mA（8053 工作电流）。
+ * OPAMP_KEEP_ENABLED=0：恢复"仅扫描期间使能"的省电策略。 */
 #ifdef OPAMP_EN_PIN
 #    if OPAMP_EN_ACTIVE
 #        define OPAMP_ENABLE()  gpio_write_pin_high(OPAMP_EN_PIN)
@@ -70,6 +81,17 @@ static uint16_t last_absv[MATRIX_ROWS][MATRIX_COLS]; /* 每键最近一次真实
 #else
 #    define OPAMP_ENABLE()  (void)0
 #    define OPAMP_DISABLE() (void)0
+#endif
+
+#ifndef OPAMP_KEEP_ENABLED
+#    define OPAMP_KEEP_ENABLED 1
+#endif
+
+/* 扫描/校准结束时的收尾：保持模式下不动它，省电模式下才关断 */
+#if OPAMP_KEEP_ENABLED
+#    define OPAMP_SCAN_END() (void)0
+#else
+#    define OPAMP_SCAN_END() OPAMP_DISABLE()
 #endif
 
 /* 多路复用器选通：EN 低有效——先禁用全部，写通道地址(低位在前)，再启用目标 mux */
@@ -143,9 +165,10 @@ void matrix_init_custom(void) {
     gpio_set_pin_output(DISCHARGE_PIN);
     gpio_write_pin_low(DISCHARGE_PIN);
 
-    /* 运放使能脚：输出，默认关闭(扫描/采样时再开，省电) */
+    /* 运放使能脚：输出。必须在初始化时就主动驱动成高——
+     * 8053 第 5 脚(DISABLE)板上只有 100k 下拉，MCU 不驱动它就是关断态。 */
     gpio_set_pin_output(OPAMP_EN_PIN);
-    OPAMP_DISABLE();
+    OPAMP_ENABLE();
 }
 
 /* 开机校准：采样各键初始校准读数写入 top_reading。
@@ -181,7 +204,7 @@ void calibrate_matrix(void) {
         }
         col_base += amux_col_sizes[amux];
     }
-    OPAMP_DISABLE();
+    OPAMP_SCAN_END();
 }
 
 bool matrix_scan_custom(matrix_row_t current_matrix[]) {
@@ -234,7 +257,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
         }
         col_base += amux_col_sizes[amux];
     }
-    OPAMP_DISABLE();
+    OPAMP_SCAN_END();
     return updated;
 }
 
@@ -247,7 +270,7 @@ void bootmagic_scan(void) {
     OPAMP_ENABLE();
     for (volatile uint8_t d = 0; d < MATRIX_COLS; d++) {}
     uint16_t v = ec_readkey_raw(0, 0, 0);
-    OPAMP_DISABLE();
+    OPAMP_SCAN_END();
     if (v > ANALOG_BOTTOMREADING_MIN) {
         bootmagic_reset_eeprom();
         bootloader_jump();
@@ -256,9 +279,15 @@ void bootmagic_scan(void) {
 
 /* ---- LPM EC 钩子(kb_common/lpm_core.c 的 LPM_EC_MATRIX 分支调用) ---- */
 
+/* 注意：休眠前的运放关断不在这里做。本仓库约定
+ * lpm_device_power_open/close 与 lpm_set_unused_pins_to_input_analog
+ * 由 keymaps 下的 keymap.c 实现（matrix.c 再定义会重复符号导致链接失败），
+ * 所以 OPAMP_DISABLE 放在 keymap 的 lpm_device_power_close() 里，
+ * 唤醒后由 lpm_hal_init -> ec_init -> matrix_init_custom 重新拉高。 */
+
 /* RTC 唤醒循环 lpm_hal_init 内调用：HAL 重初始化后恢复 EC 引脚与 ADC */
 int ec_init(void) {
-    matrix_init_custom();
+    matrix_init_custom(); /* 内含 OPAMP_ENABLE()，唤醒后重新使能运放 */
     return 0;
 }
 
