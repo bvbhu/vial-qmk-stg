@@ -68,7 +68,7 @@ qmk compile -kb bvbhu/n32h481_iotest -km default
 或（QMK MSYS 里直接 make）：
 
 ```sh
-cd /d/projects/vial\ wireless\ ec/vial-qmk-stg-n32h481
+cd /d/projects/vial\ wireless\ ec/vial-qmk-stg   # vial 分支（N32H481 支持已合入）
 make bvbhu/n32h481_iotest:default
 ```
 
