@@ -65,10 +65,13 @@
 
 | 桥引脚 | 接到 |
 |---|---|
-| **PA8 (UART1 RX)** | STM32 **PA2**（TX） |
-| **PA9 (UART1 TX)** | STM32 **PA3**（RX） |
+| **PA8 (UART1 RX)** —— 模块丝印 `D8` | STM32 **PA2**（TX） |
+| **PA9 (UART1 TX)** —— 模块丝印 `D9` | STM32 **PA3**（RX） |
 | **GND** | STM32 **GND**（必须共地） |
 | 3V3 / VCC | 按模块要求供电（3.3V 电平两侧一致） |
+
+> 同一只脚有两套叫法：模块/排针丝印写 `D8`/`D9`，芯片手册写 `PA8`/`PA9`，指的是 UART1 的
+> RXD1 / TXD1（`wch-ble-bridge/APP/include/uart_bridge.h:12`）。
 
 **交叉接线**：TX→RX、RX→TX。接成 TX→TX 是最常见的错误，表现为完全无响应。
 
@@ -84,9 +87,11 @@
 > （见第二节表格），**桥的** PA8/PA9 才是 BHQ 串口。两张表里的 PA8/PA9 互不相干，
 > 不要拿 STM32 的矩阵脚去接桥的串口。
 >
-> 副作用：桥的**调试串口**因此让到 **UART0 / PB4/PB7**（TX=PB7、RX=PB4、
-> **115200 8N1**，不是 128000）。抓桥日志时把 USB-TTL 的 RX 接 PB7。
-> 桥固件有编译期校验保证调试口与 BHQ 口不同 UART，配成同一个会直接编译报错。
+> 副作用：QMK 口让出 UART0 后，桥的**调试串口**用 UART0，**默认 `PA15/PA14`（重映射，TX=PA14、RX=PA15）**，
+> **115200 8N1**，不是 128000。抓桥日志时把 USB-TTL 的 **RX 接 PA14**、GND 与桥共地。
+> 若 `PB4/PB7` 这两个旧焊盘还空着，也可把 `config.h` 的 `BRIDGE_DEBUG_PIN` 改成 `PB4PB7`（TX=PB7、RX=PB4），
+> 不重映射、不碰 SWD，更稳。桥固件有编译期校验保证调试口与 QMK 口不同 UART，配成同一个会直接编译报错。
+> 详见 `wch-wireless-bridge/docs/debug-uart.md`。
 
 > 桥模块的固件需要单独烧录（WCH 工具链 + MounRiver Studio 工程在 `ch582f_ble_bridge/`、
 > `ch591r_ble_bridge/`）。本说明只涉及 STM32 侧固件。

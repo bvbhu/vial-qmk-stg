@@ -106,6 +106,51 @@ JLink.exe -device N32H481RE -if SWD -speed 4000 -CommanderScript flash.jlink
 | `Cannot connect to target` | SWDIO/SWCLK 接反或板未上电 | 检查 4 线,给板供电 |
 | `Unknown device N32H481RE` | J-Link 库旧 | 升级 J-Link Pack 或手动加设备 |
 | `Flash download failed` | Flash 算法不匹配/写保护 | 用官方 FLM,或先全片擦除(`erase`) |
+| `Error while parsing parameter <Addr>` | **文件路径里有空格** | J-Link 按空格切参数,先把固件复制到无空格路径再烧(见 §3.6) |
+| `RDP2 protection is active, not possible to unsecure the device!` | J-Link 误报 | 可忽略;后续擦写/校验照常完成 |
+
+### 3.6 实测记录（2026-11-07,J-Link V9.90 + N32H481RE）
+
+**烧录 `bvbhu/tl12wlh481:default`（61,612 B）完整流程，已验证通过：**
+
+```sh
+# 1) 固件复制到无空格路径 —— 路径含空格时 loadfile 必定失败
+mkdir -p /c/Users/Administrator/AppData/Local/Temp/tl12flash
+cp .build/bvbhu_tl12wlh481_default.hex \
+   /c/Users/Administrator/AppData/Local/Temp/tl12flash/tl12wlh481.hex
+
+# 2) 命令脚本
+printf 'r\nloadfile C:/Users/Administrator/AppData/Local/Temp/tl12flash/tl12wlh481.hex\nr\ng\nqc\n' \
+   > /tmp/flash.jlink
+
+# 3) 烧录
+"/c/Program Files/SEGGER/JLink_V990/JLink.exe" \
+   -device N32H481RE -if SWD -speed 4000 -autoconnect 1 \
+   -CommanderScript /tmp/flash.jlink
+```
+
+成功输出：
+
+```
+J-Link: Flash download: Bank 0 @ 0x08000000: 1 range affected (65536 bytes)
+J-Link: Flash download: Program & Verify speed: 77 KB/s
+O.K.
+```
+
+**关键结论：**
+
+- `N32H481RE` 设备名在 **J-Link V9.90 上直接可用**，不需要手动加设备、也不需要官方 FLM。
+- `loadfile <file>, <Addr>` 的地址参数**必须用逗号分隔**；烧 `.hex` 可完全省略地址参数
+  （hex 内含绝对地址）。
+- **N32H481 无 bootloader，固件链接在 `0x08000000`**，直接烧这个地址；
+  `keyboard.json` 里 `"bootloader": "custom"` 就是这个意思，不要套用 F103 的 `0x08002000`。
+- 回读校验：`savebin <file> 0x08000000 <size>` 再与构建产物逐字节比对。
+  本次实测 **61,612 字节全部一致**。
+- 芯片状态自检：J-Link `regs` 看 PC 落在 `0x0800xxxx`（固件区间）、`IPSR=0`
+  （线程模式，未进异常），即固件已正常跑起来。
+- 板子**没接 USB** 时，USBHS 的 `DCFG`(`0x40040A00`) 的 `DADR` 恒为 `0`
+  ——主机没分配地址，属正常现象，不代表固件有问题。
+
 
 ## 4. 验证
 
