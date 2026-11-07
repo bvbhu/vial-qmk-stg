@@ -97,4 +97,29 @@
 #define N32_SERIAL_UART7_IRQ_PRIORITY      12
 #define N32_SERIAL_UART8_IRQ_PRIORITY      12
 
+/*
+ * SPI driver system settings (ChibiOS HAL_USE_SPI / QMK spi_master).
+ * The LLD is interrupt driven (TXE/RXNE), 8-bit frames, master + software
+ * NSS, and needs no DMA.  Only the instances enabled here get an SPIDx
+ * object and an ISR vector; HAL_USE_SPI must additionally be TRUE in the
+ * keyboard halconf.h (SPI_DRIVER_REQUIRED=yes does that automatically).
+ *
+ * SPI1 is the QMK default on this port (PA5/PA6/PA7, AF1).  Override
+ * SPI_DRIVER / SPI_*_PIN / SPI_*_PAL_MODE in config.h when those pins are
+ * already used by the matrix, e.g. on bvbhu/tl12wlh481.
+ */
+#define N32_SPI_USE_SPI1                   TRUE
+#define N32_SPI_USE_SPI2                   FALSE
+#define N32_SPI_USE_SPI3                   FALSE
+#define N32_SPI_USE_SPI4                   FALSE
+#define N32_SPI_USE_SPI5                   FALSE
+#define N32_SPI_USE_SPI6                   FALSE
+
+#define N32_SPI_SPI1_IRQ_PRIORITY          12
+#define N32_SPI_SPI2_IRQ_PRIORITY          12
+#define N32_SPI_SPI3_IRQ_PRIORITY          12
+#define N32_SPI_SPI4_IRQ_PRIORITY          12
+#define N32_SPI_SPI5_IRQ_PRIORITY          12
+#define N32_SPI_SPI6_IRQ_PRIORITY          12
+
 #endif /* MCUCONF_H */

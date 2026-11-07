@@ -45,8 +45,16 @@
 
 /*
  * MCU type, supported types are defined in ./os/hal/platforms/hal_lld.h.
+ *
+ * The N32H47x/48x SDK uses one CMSIS header for the whole family and picks
+ * the IRQ table from the part macro.  mcu_selection.mk exports the selected
+ * part (e.g. -DN32H482=) to every translation unit; only when no part was
+ * supplied do we fall back to the original N32H481REL7K.
  */
+#if !defined(N32H481RE) && !defined(N32H482) && !defined(N32H487) &&          \
+    !defined(N32H473) && !defined(N32H474) && !defined(N32H475)
 #define N32H481RE
+#endif
 
 /*
  * GPIO settings, allow unused GPIO for smaller chip packages.

@@ -878,7 +878,21 @@ ifneq ($(findstring AT32F415, $(MCU)),)
   AT32_BOOTLOADER_ADDRESS ?= 0x1FFFAC00
 endif
 
-ifneq ($(findstring N32H481RE, $(MCU)),)
+# N32H47x/48x family: the official SDK ships one CMSIS header, one startup
+# file and one linker script for the whole family, so the HAL port in
+# chibios-contrib/os/hal/ports/N32/N32H48x is shared.  Only the CMSIS device
+# macro (which selects the IRQ table) and the linker script differ.
+#
+# USBHS (DWC OTG on PB14/PB15) exists on N32H481RE / N32H482 / N32H487 only.
+# N32H473 / N32H474 / N32H475 have USB FS Device instead and need a separate
+# USB LLD, so they are deliberately not accepted here -- see
+# docs/n32h48x_family_porting.md for the gap list.
+ifneq ($(filter N32H481RE N32H482 N32H487,$(MCU)),)
+  # Exact part macro, exported to every translation unit.  The board header,
+  # hal_lld.h and cmparams.h all fall back to N32H481RE when it is absent.
+  N32_DEVICE := $(filter N32H481RE N32H482 N32H487,$(MCU))
+  OPT_DEFS += -D$(N32_DEVICE)=
+
   # Cortex version
   MCU = cortex-m4
 
@@ -894,8 +908,9 @@ ifneq ($(findstring N32H481RE, $(MCU)),)
   MCU_SERIES = N32H48x
 
   # Linker script to use
-  # - it should exist either in <chibios>/os/common/startup/ARMCMx/compilers/GCC/ld/
-  #   or <keyboard_dir>/ld/
+  # - 512K flash / 192K SRAM on all three parts, with the last 16K of flash
+  #   reserved for the QMK flash EEPROM.  N32H481RE.ld is therefore used as
+  #   the common family script (see the comment at the top of that file).
   MCU_LDSCRIPT ?= N32H481RE
 
   # Startup code to use

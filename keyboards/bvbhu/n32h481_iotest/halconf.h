@@ -26,4 +26,11 @@
    for 38400 8N1 before using the driver. */
 #define HAL_USE_SERIAL TRUE
 
+/* N32 SPIv1 LLD (SPID1 by default, PA5/PA6/PA7 AF1).  Enabling this here
+   makes the pin-test firmware compile and link the driver; call
+   spi_start()/spi_transmit() from keyboard code to actually drive the bus.
+   QMK's spi_master.c is pulled in by SPI_DRIVER_REQUIRED=yes. */
+#undef HAL_USE_SPI
+#define HAL_USE_SPI TRUE
+
 #include_next <halconf.h>

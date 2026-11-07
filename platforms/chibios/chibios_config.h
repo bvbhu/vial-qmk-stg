@@ -161,8 +161,57 @@
 #if defined(MCU_N32)
 #    define CPU_CLOCK N32_SYSCLK
 
-#    if defined(N32H481RE)
-#        define USE_GPIOV1
+// The whole N32H47x/48x family shares the GPIOv1 PAL low level driver.
+#    define USE_GPIOV1
+
+// QMK's generic spi_master.c fills a STM32-style "cr1" field.  On N32 the
+// equivalent bits live in CTRL1 with different names but, conveniently, the
+// N32 BR bits are 0..2 (value 0..7 == /2../256) just like the STM32
+// BR_2/1/0 combination, so a direct alias is enough.  The LLD then adds
+// MSEL/SSMEN/SSEL (master + software NSS) and keeps 8-bit frames.
+#    ifndef SPI_CR1_LSBFIRST
+#        define SPI_CR1_LSBFIRST SPI_CTRL1_LSBFF
+#    endif
+#    ifndef SPI_CR1_CPHA
+#        define SPI_CR1_CPHA SPI_CLKPHA
+#    endif
+#    ifndef SPI_CR1_CPOL
+#        define SPI_CR1_CPOL SPI_CLKPOL
+#    endif
+#    ifndef SPI_CR1_BR_0
+#        define SPI_CR1_BR_0 SPI_CTRL1_CTRL1_BR0
+#    endif
+#    ifndef SPI_CR1_BR_1
+#        define SPI_CR1_BR_1 SPI_CTRL1_CTRL1_BR1
+#    endif
+#    ifndef SPI_CR1_BR_2
+#        define SPI_CR1_BR_2 SPI_CTRL1_CTRL1_BR2
+#    endif
+
+// B14/B15 are USB HS D-/D+ on this family, so the QMK defaults (SCK=B13,
+// MOSI=B15, MISO=B14) MUST NOT be used.  SPI1 on PA5/PA6/PA7 (all AF1) is
+// the default instead.  Keyboards that use those pins for the matrix must
+// override these macros with another SPI instance / pin set.
+#    ifndef SPI_DRIVER
+#        define SPI_DRIVER SPID1
+#    endif
+#    ifndef SPI_SCK_PIN
+#        define SPI_SCK_PIN A5
+#    endif
+#    ifndef SPI_MOSI_PIN
+#        define SPI_MOSI_PIN A7
+#    endif
+#    ifndef SPI_MISO_PIN
+#        define SPI_MISO_PIN A6
+#    endif
+#    ifndef SPI_SCK_PAL_MODE
+#        define SPI_SCK_PAL_MODE PAL_MODE_ALTERNATE(1)
+#    endif
+#    ifndef SPI_MOSI_PAL_MODE
+#        define SPI_MOSI_PAL_MODE PAL_MODE_ALTERNATE(1)
+#    endif
+#    ifndef SPI_MISO_PAL_MODE
+#        define SPI_MISO_PAL_MODE PAL_MODE_ALTERNATE(1)
 #    endif
 #endif
 
